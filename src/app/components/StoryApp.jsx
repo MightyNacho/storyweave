@@ -1,5 +1,6 @@
 'use client';
 import { useState, useEffect, useRef } from "react";
+import { supabase } from "@/lib/supabase";
 
 
 
@@ -16,17 +17,27 @@ const hexToRgb = (hex) => {
   return `${r},${g},${b}`;
 };
 
-// ── Storage helpers ────────────────────────────────────────────────────────
-const STORAGE_KEY = "collab_stories_v1";
-const loadStories = async () => {
-  try {
-    const res = await window.storage.get(STORAGE_KEY);
-    return res ? JSON.parse(res.value) : [];
-  } catch { return []; }
-};
-const saveStories = async (stories) => {
-  try { await window.storage.set(STORAGE_KEY, JSON.stringify(stories)); } catch {}
-};
+// ── Supabase mapping helpers ───────────────────────────────────────────────
+const toDb = (story) => ({
+  title: story.title,
+  genre: story.genre || "",
+  turn_based: story.turnBased,
+  participants: story.participants,
+  entries: story.entries,
+  current_turn_index: story.currentTurnIndex,
+});
+
+const fromDb = (row) => ({
+  id: row.id,
+  title: row.title,
+  genre: row.genre || "",
+  turnBased: row.turn_based,
+  participants: row.participants || [],
+  entries: row.entries || [],
+  currentTurnIndex: row.current_turn_index || 0,
+  creatorId: row.creator_id,
+  createdAt: row.created_at,
+});
 
 // ── Email invite helper ────────────────────────────────────────────────────
 // Calls /api/invite when running in your Next.js app.
@@ -150,49 +161,89 @@ ${storyText.slice(-1200) || "(The story has not yet begun.)"}`
   return { points, stage: currentStage };
 };
 export default function App() {
-  const [view, setView] = useState("dashboard"); // dashboard | create | edit | story
+  const [session, setSession] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [view, setView] = useState("dashboard");
   const [stories, setStories] = useState([]);
   const [activeStory, setActiveStory] = useState(null);
   const [editingStory, setEditingStory] = useState(null);
   const [loading, setLoading] = useState(true);
 
+  // Auth state
   useEffect(() => {
-    loadStories().then(s => { setStories(s); setLoading(false); });
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      setAuthLoading(false);
+    });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+    });
+    return () => subscription.unsubscribe();
   }, []);
 
-  const persistStories = (updated) => {
-    setStories(updated);
-    saveStories(updated);
-  };
+  // Load stories when signed in
+  useEffect(() => {
+    if (!session) { setLoading(false); return; }
+    setLoading(true);
+    supabase.from("stories").select("*").order("created_at", { ascending: false })
+      .then(({ data, error }) => {
+        if (!error) setStories((data || []).map(fromDb));
+        setLoading(false);
+      });
+  }, [session]);
 
   const openStory = (story) => { setActiveStory(story); setView("story"); };
   const goHome = () => { setView("dashboard"); setActiveStory(null); setEditingStory(null); };
 
-  const updateActiveStory = (updated) => {
+  const updateActiveStory = async (updated) => {
     setActiveStory(updated);
-    const all = stories.map(s => s.id === updated.id ? updated : s);
-    persistStories(all);
+    setStories(prev => prev.map(s => s.id === updated.id ? updated : s));
+    await supabase.from("stories").update(toDb(updated)).eq("id", updated.id);
   };
 
-  const createStory = (newStory) => {
-    const all = [newStory, ...stories];
-    persistStories(all);
+  const createStory = async (newStory) => {
+    // Optimistic: switch to story view immediately
+    setStories(prev => [newStory, ...prev]);
     setActiveStory(newStory);
     setView("story");
+    // Persist to DB and swap in the real UUID
+    const { data } = await supabase
+      .from("stories")
+      .insert({ ...toDb(newStory), creator_id: session.user.id })
+      .select()
+      .single();
+    if (data) {
+      const created = fromDb(data);
+      setStories(prev => prev.map(s => s.id === newStory.id ? created : s));
+      setActiveStory(prev => prev?.id === newStory.id ? created : prev);
+    }
   };
 
-  const deleteStory = (id) => {
-    const all = stories.filter(s => s.id !== id);
-    persistStories(all);
+  const deleteStory = async (id) => {
+    setStories(prev => prev.filter(s => s.id !== id));
+    await supabase.from("stories").delete().eq("id", id);
   };
 
   const startEdit = (story) => { setEditingStory(story); setView("edit"); };
 
-  const saveEdit = (updated) => {
-    const all = stories.map(s => s.id === updated.id ? updated : s);
-    persistStories(all);
+  const saveEdit = async (updated) => {
+    setStories(prev => prev.map(s => s.id === updated.id ? updated : s));
     goHome();
+    await supabase.from("stories").update(toDb(updated)).eq("id", updated.id);
   };
+
+  if (authLoading) {
+    return (
+      <div style={styles.root}>
+        <div style={styles.grain} />
+        <p style={{ ...styles.muted, position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)" }}>
+          Loading…
+        </p>
+      </div>
+    );
+  }
+
+  if (!session) return <LoginScreen />;
 
   return (
     <div style={styles.root}>
@@ -201,10 +252,12 @@ export default function App() {
         <Dashboard
           stories={stories}
           loading={loading}
+          user={session.user}
           onOpen={openStory}
           onDelete={deleteStory}
           onEdit={startEdit}
           onCreate={() => setView("create")}
+          onSignOut={() => supabase.auth.signOut()}
         />
       )}
       {view === "create" && (
@@ -225,9 +278,114 @@ export default function App() {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
+// LOGIN SCREEN
+// ══════════════════════════════════════════════════════════════════════════
+function LoginScreen() {
+  const [email, setEmail] = useState("");
+  const [sent, setSent] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const handleGoogle = async () => {
+    await supabase.auth.signInWithOAuth({
+      provider: "google",
+      options: { redirectTo: `${window.location.origin}/auth/callback` },
+    });
+  };
+
+  const handleEmail = async (e) => {
+    e.preventDefault();
+    if (!email.includes("@")) return setError("Enter a valid email address.");
+    setError("");
+    setLoading(true);
+    const { error } = await supabase.auth.signInWithOtp({
+      email,
+      options: { emailRedirectTo: `${window.location.origin}/auth/callback` },
+    });
+    if (error) setError(error.message);
+    else setSent(true);
+    setLoading(false);
+  };
+
+  return (
+    <div style={styles.root}>
+      <div style={styles.grain} />
+      <div style={loginStyles.wrap}>
+        <h1 style={{ ...styles.logo, marginBottom: 4 }}>Story Weave</h1>
+        <p style={loginStyles.subtitle}>Collaborative storytelling, one paragraph at a time.</p>
+
+        <button style={loginStyles.googleBtn} onClick={handleGoogle}>
+          <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+            <path d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908C16.658 11.83 17.64 9.67 17.64 9.2z" fill="#4285F4"/>
+            <path d="M9 18c2.43 0 4.467-.806 5.956-2.184l-2.908-2.258c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332C2.438 15.983 5.482 18 9 18z" fill="#34A853"/>
+            <path d="M3.964 10.707c-.18-.54-.282-1.117-.282-1.707s.102-1.167.282-1.707V4.961H.957C.347 6.175 0 7.548 0 9s.348 2.825.957 4.039l3.007-2.332z" fill="#FBBC05"/>
+            <path d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0 5.482 0 2.438 2.017.957 4.961L3.964 7.293C4.672 5.166 6.656 3.58 9 3.58z" fill="#EA4335"/>
+          </svg>
+          Continue with Google
+        </button>
+
+        <div style={loginStyles.divider}>
+          <div style={loginStyles.dividerLine} />
+          <span style={loginStyles.dividerText}>or</span>
+          <div style={loginStyles.dividerLine} />
+        </div>
+
+        {sent ? (
+          <p style={loginStyles.sent}>✓ Check your email for a magic link.</p>
+        ) : (
+          <form onSubmit={handleEmail} style={loginStyles.form}>
+            <input
+              style={{ ...styles.input, marginBottom: 0 }}
+              type="email"
+              placeholder="your@email.com"
+              value={email}
+              onChange={e => setEmail(e.target.value)}
+            />
+            {error && <p style={loginStyles.error}>{error}</p>}
+            <button
+              type="submit"
+              style={{ ...styles.btnPrimary, width: "100%", opacity: loading ? 0.6 : 1 }}
+              disabled={loading}
+            >
+              {loading ? "Sending…" : "Send Magic Link"}
+            </button>
+          </form>
+        )}
+      </div>
+    </div>
+  );
+}
+
+const loginStyles = {
+  wrap: {
+    display: "flex", flexDirection: "column", alignItems: "center",
+    justifyContent: "center", minHeight: "100vh", padding: "40px 24px",
+    maxWidth: 380, margin: "0 auto", width: "100%",
+  },
+  subtitle: {
+    color: "#666", fontSize: 14, fontStyle: "italic", textAlign: "center",
+    marginBottom: 40, marginTop: 0,
+  },
+  googleBtn: {
+    display: "flex", alignItems: "center", justifyContent: "center", gap: 10,
+    width: "100%", background: "#fff", color: "#111", border: "none",
+    borderRadius: 8, padding: "11px 20px", cursor: "pointer", fontSize: 14,
+    fontWeight: 500, fontFamily: "'DM Sans', sans-serif",
+  },
+  divider: {
+    display: "flex", alignItems: "center", gap: 12, width: "100%", margin: "20px 0",
+  },
+  dividerLine: { flex: 1, height: 1, background: "#2a2825" },
+  dividerText: { color: "#555", fontSize: 12 },
+  form: { display: "flex", flexDirection: "column", gap: 10, width: "100%" },
+  sent: { color: "#81B29A", textAlign: "center", fontSize: 14, margin: 0 },
+  error: { color: "#E07A5F", fontSize: 12, margin: 0 },
+};
+
+// ══════════════════════════════════════════════════════════════════════════
 // DASHBOARD
 // ══════════════════════════════════════════════════════════════════════════
-function Dashboard({ stories, loading, onOpen, onDelete, onEdit, onCreate }) {
+function Dashboard({ stories, loading, user, onOpen, onDelete, onEdit, onCreate, onSignOut }) {
   return (
     <div style={styles.page}>
       <header style={styles.header}>
@@ -235,7 +393,17 @@ function Dashboard({ stories, loading, onOpen, onDelete, onEdit, onCreate }) {
           <h1 style={styles.logo}>Story Weave</h1>
           <p style={styles.tagline}>Collaborative storytelling, one paragraph at a time.</p>
         </div>
-        <button style={styles.btnPrimary} onClick={onCreate}>+ New Story</button>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          {user?.user_metadata?.avatar_url && (
+            <img
+              src={user.user_metadata.avatar_url}
+              alt=""
+              style={{ width: 30, height: 30, borderRadius: "50%", border: "1px solid #2a2825" }}
+            />
+          )}
+          <button style={styles.btnPrimary} onClick={onCreate}>+ New Story</button>
+          <button style={styles.btnSecondary} onClick={onSignOut}>Sign out</button>
+        </div>
       </header>
 
       {loading ? (
@@ -392,7 +560,11 @@ function CreateStory({ onCancel, onCreate }) {
       createdAt: new Date().toISOString(),
     };
     setSending(true);
-    await sendInvites(story, validP);
+    try {
+      await sendInvites(story, validP);
+    } catch (err) {
+      console.error("Invite email error:", err.message);
+    }
     setSending(false);
     onCreate(story);
   };
