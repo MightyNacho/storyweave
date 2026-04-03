@@ -57,19 +57,24 @@ export async function POST(request) {
       )
     );
 
-    const failed = results
-      .filter((r) => r.status === "rejected")
-      .map((r) => r.reason?.message);
-
-    if (failed.length === participants.length) {
-      return Response.json({ error: "All invitations failed to send." }, { status: 500 });
+    let sent = 0;
+    const failed = [];
+    for (const result of results) {
+      if (result.status === "rejected") {
+        failed.push(result.reason?.message ?? "Unknown error");
+      } else if (result.value?.error) {
+        console.error("Resend error:", result.value.error);
+        failed.push(result.value.error.message ?? "Resend error");
+      } else {
+        sent++;
+      }
     }
 
-    return Response.json({
-      success: true,
-      sent: results.filter((r) => r.status === "fulfilled").length,
-      failed: failed.length,
-    });
+    if (sent === 0) {
+      return Response.json({ error: "All invitations failed to send.", details: failed }, { status: 500 });
+    }
+
+    return Response.json({ success: true, sent, failed: failed.length });
   } catch (error) {
     console.error("Invite email error:", error);
     return Response.json({ error: "Failed to send invitations." }, { status: 500 });
