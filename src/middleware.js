@@ -1,7 +1,7 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse } from "next/server";
 
-export async function proxy(request) {
+export async function middleware(request) {
   // If env vars aren't configured yet, pass through without crashing
   if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
     return NextResponse.next({ request });
@@ -31,7 +31,7 @@ export async function proxy(request) {
     await supabase.auth.getUser();
   } catch (error) {
     // Auth errors must not block page rendering
-    console.error("Proxy session refresh error:", error);
+    console.error("Middleware session refresh error:", error);
   }
 
   return supabaseResponse;

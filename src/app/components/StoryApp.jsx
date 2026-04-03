@@ -169,12 +169,25 @@ export default function App() {
   const [editingStory, setEditingStory] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  // Auth state
+  // Auth state — also handles ?code= PKCE exchange if OAuth redirected to root
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get("code");
+
+    const init = async () => {
+      if (code) {
+        // Exchange the PKCE code if it landed here instead of /auth/callback
+        await supabase.auth.exchangeCodeForSession(code);
+        // Clean the URL so the code doesn't linger
+        window.history.replaceState({}, "", window.location.pathname);
+      }
+      const { data: { session } } = await supabase.auth.getSession();
       setSession(session);
       setAuthLoading(false);
-    });
+    };
+
+    init();
+
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
     });
