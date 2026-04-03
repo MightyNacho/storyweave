@@ -860,7 +860,19 @@ function StoryEditor({ story, onBack, onUpdate }) {
   const [analysedThisCycle, setAnalysedThisCycle] = useState(false);
   const [turnBased, setTurnBased] = useState(story.turnBased);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [reminderSent, setReminderSent] = useState(new Set());
+  const [reminderFeedback, setReminderFeedback] = useState(new Set());
+  const [showPassModal, setShowPassModal] = useState(false);
   const bottomRef = useRef(null);
+
+  useEffect(() => {
+    const t = setTimeout(() => setSidebarOpen(false), 2000);
+    return () => clearTimeout(t);
+  }, []);
+
+  useEffect(() => {
+    setReminderSent(new Set());
+  }, [story.currentTurnIndex]);
 
   const activeParticipant = story.participants.find(p => p.email === activePEmail) || story.participants[0];
   const currentTurnParticipant = story.participants[story.currentTurnIndex % story.participants.length];
@@ -930,6 +942,45 @@ function StoryEditor({ story, onBack, onUpdate }) {
 
   const closePanel = () => setOpenPanel(null);
 
+  const handlePassQuill = async () => {
+    const nextIndex = (story.currentTurnIndex + 1) % story.participants.length;
+    const nextParticipant = story.participants[nextIndex];
+    const updated = { ...story, turnBased: true, currentTurnIndex: nextIndex };
+    setTurnBased(true);
+    onUpdate(updated);
+    setShowPassModal(false);
+    try {
+      await fetch("/api/notify-turn", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ story: updated, currentParticipant: nextParticipant, previousParticipant: activeParticipant }),
+      });
+    } catch (err) {
+      console.error("Pass quill notify failed:", err);
+    }
+  };
+
+  const handleReminder = async (e, p) => {
+    e.stopPropagation();
+    if (reminderSent.has(p.email)) return;
+    setReminderSent(s => new Set([...s, p.email]));
+    setReminderFeedback(s => new Set([...s, p.email]));
+    setTimeout(() => setReminderFeedback(s => { const n = new Set(s); n.delete(p.email); return n; }), 2000);
+    const lastEntry = story.entries[story.entries.length - 1];
+    const previousParticipant = lastEntry
+      ? story.participants.find(x => x.email === lastEntry.email) ?? null
+      : null;
+    try {
+      await fetch("/api/notify-turn", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ story, currentParticipant: p, previousParticipant }),
+      });
+    } catch (err) {
+      console.error("Reminder failed:", err);
+    }
+  };
+
   const toggleMode = () => {
     const updated = { ...story, turnBased: !turnBased };
     setTurnBased(!turnBased);
@@ -997,12 +1048,33 @@ function StoryEditor({ story, onBack, onUpdate }) {
             onClick={() => setActivePEmail(p.email)}
           >
             <div style={{ ...styles.authorDot, background: p.color }} />
-            <div>
-              <div style={{ ...styles.participantName, color: activePEmail === p.email ? p.color : "#d4cdc0" }}>
-                {p.name || p.email}
-              </div>
-              {p.name && <div style={styles.participantEmail}>{p.email}</div>}
+            <div style={{ flex: 1, minWidth: 0, position: "relative" }}>
+              {reminderFeedback.has(p.email) ? (
+                <div style={styles.reminderFeedback}>Reminder sent</div>
+              ) : (
+                <>
+                  <div style={{ ...styles.participantName, color: activePEmail === p.email ? p.color : "#d4cdc0" }}>
+                    {p.name || p.email}
+                  </div>
+                  {p.name && <div style={styles.participantEmail}>{p.email}</div>}
+                </>
+              )}
             </div>
+            <button
+              style={{
+                ...styles.bellBtn,
+                opacity: reminderSent.has(p.email) ? 0.25 : 0.6,
+                cursor: reminderSent.has(p.email) ? "default" : "pointer",
+              }}
+              onClick={(e) => handleReminder(e, p)}
+              disabled={reminderSent.has(p.email)}
+              title="Send reminder"
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+                <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+              </svg>
+            </button>
           </div>
         ))}
 
@@ -1146,16 +1218,47 @@ function StoryEditor({ story, onBack, onUpdate }) {
               </span>
             </div>
 
-            <button
-              style={{ ...styles.btnPrimary, opacity: (!canWrite || !text.trim()) ? 0.4 : 1 }}
-              onClick={handleSubmit}
-              disabled={!canWrite || !text.trim()}
-            >
-              Add to Story ⌘↵
-            </button>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button
+                style={{ ...styles.passQuillBtn, opacity: !canWrite ? 0.4 : 1 }}
+                onClick={() => setShowPassModal(true)}
+                disabled={!canWrite}
+                title="Pass the quill to the next writer"
+              >
+                Pass the Quill
+              </button>
+              <button
+                style={{ ...styles.btnPrimary, opacity: (!canWrite || !text.trim()) ? 0.4 : 1 }}
+                onClick={handleSubmit}
+                disabled={!canWrite || !text.trim()}
+              >
+                Add to Story ⌘↵
+              </button>
+            </div>
           </div>
         </div>
       </main>
+
+      {showPassModal && (() => {
+        const nextIndex = (story.currentTurnIndex + 1) % story.participants.length;
+        const next = story.participants[nextIndex];
+        return (
+          <div style={styles.modalOverlay}>
+            <div style={styles.modal}>
+              <h3 style={styles.modalTitle}>Pass the Quill?</h3>
+              <p style={styles.modalBody}>
+                This will end your turn and pass the quill to{" "}
+                <strong style={{ color: next?.color }}>{next?.name || next?.email}</strong>.
+                They'll receive an email letting them know it's their turn to write.
+              </p>
+              <div style={styles.modalActions}>
+                <button style={styles.btnSecondary} onClick={() => setShowPassModal(false)}>Cancel</button>
+                <button style={styles.btnPrimary} onClick={handlePassQuill}>Pass the Quill →</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -1342,6 +1445,18 @@ const styles = {
   },
   participantName: { fontSize: 13, fontWeight: 500, transition: "color 0.15s" },
   participantEmail: { fontSize: 11, color: "#555", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+  bellBtn: {
+    background: "none", border: "none", color: "#aaa", padding: "2px 4px",
+    display: "flex", alignItems: "center", flexShrink: 0, transition: "opacity 0.15s",
+  },
+  reminderFeedback: {
+    fontSize: 12, color: "#81B29A", fontStyle: "italic",
+  },
+  passQuillBtn: {
+    background: "none", border: "1px solid #3a3a3a", borderRadius: 8,
+    color: "#aaa", cursor: "pointer", fontSize: 13, padding: "10px 16px",
+    fontFamily: "'DM Sans', sans-serif", transition: "all 0.15s",
+  },
   stat: { fontSize: 12, color: "#666", margin: "2px 0" },
 
   canvas: {
