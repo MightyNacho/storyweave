@@ -54,113 +54,7 @@ const sendInvites = async (story, participants) => {
   }
 };
 
-// ── Dan Harmon's Story Circle stages ─────────────────────────────────────
-// 1. You (establish who the character is in their comfort zone)
-// 2. Need (something is lacking; desire or discomfort emerges)
-// 3. Go (character crosses a threshold into the unfamiliar)
-// 4. Search (adapting, struggling, seeking in the unfamiliar world)
-// 5. Find (they find what they were looking for — but at a cost)
-// 6. Take (they take it; the price is paid, something changes)
-// 7. Return (the character returns to the familiar world, changed)
-// 8. Change (they are fundamentally different; a new equilibrium)
-
-const STORY_CIRCLE_STAGES = [
-  { num: 1, name: "You",    hint: "Who are we with? What is their ordinary world?" },
-  { num: 2, name: "Need",   hint: "What do they want or lack? What disrupts the comfort?" },
-  { num: 3, name: "Go",     hint: "They cross a threshold. Something begins." },
-  { num: 4, name: "Search", hint: "They struggle, adapt, or seek in unfamiliar territory." },
-  { num: 5, name: "Find",   hint: "Something is found — but it costs more than expected." },
-  { num: 6, name: "Take",   hint: "They take what they found. A price is paid." },
-  { num: 7, name: "Return", hint: "They begin the journey back. Something has shifted." },
-  { num: 8, name: "Change", hint: "Who are they now? The circle closes — but differently." },
-];
-
-// ── AI suggestion via Claude API ──────────────────────────────────────────
-const getAISuggestion = async (storyText, entries) => {
-  const wordCount = storyText.split(/\s+/).filter(Boolean).length;
-  const entryCount = entries.length;
-
-  // Estimate where we are in the story circle based on progress
-  // We use entry count as a rough proxy; every ~2-3 entries = one stage
-  const stageIndex = Math.min(
-    Math.floor(entryCount / 2),
-    STORY_CIRCLE_STAGES.length - 1
-  );
-  const currentStage = STORY_CIRCLE_STAGES[stageIndex];
-  const nextStage = STORY_CIRCLE_STAGES[Math.min(stageIndex + 1, 7)];
-
-  const snippet = storyText.slice(-600);
-
-  const response = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 1000,
-      messages: [{
-        role: "user",
-        content: `You are a subtle story compass using Dan Harmon's Story Circle framework. A group is collaboratively writing a story.
-
-Based on the story so far, the narrative appears to be in or approaching Stage ${currentStage.num} ("${currentStage.name}") of the Story Circle.
-
-Stage ${currentStage.num} — ${currentStage.name}: ${currentStage.hint}
-Next stage to move toward — Stage ${nextStage.num} — ${nextStage.name}: ${nextStage.hint}
-
-Your job: Give ONE very short, vague, poetic nudge (1-2 sentences MAX) that hints at a direction without telling them what to write. Be evocative, not prescriptive. Do NOT mention the Story Circle, stages, or theory. Do NOT write any story content. Just a gentle whisper of direction — like a muse, not an instructor.
-
-STORY SO FAR:
-${snippet || "(Story is just beginning.)"}
-
-Nudge:`
-      }]
-    })
-  });
-  const data = await response.json();
-  const text = data.content?.map(b => b.text || "").join("").trim() || "";
-  return { text, stage: currentStage };
-};
-
-// ── AI Analysis agent via Claude API ─────────────────────────────────────
-// A second agent — the Analyst — reads the whole story and gives concrete
-// structural feedback based on where the Story Circle says things should be.
-const getAIAnalysis = async (storyText, entries) => {
-  const stageIndex = Math.min(Math.floor((entries.length || 0) / 2), STORY_CIRCLE_STAGES.length - 1);
-  const currentStage = STORY_CIRCLE_STAGES[stageIndex];
-  const wordCount = storyText.split(/\s+/).filter(Boolean).length;
-
-  const response = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 1000,
-      messages: [{
-        role: "user",
-        content: `You are a thoughtful story editor and structural analyst. A group of collaborators is writing a story together. Analyse what they have written so far using Dan Harmon's Story Circle as your framework.
-
-The story is currently in Stage ${currentStage.num}: "${currentStage.name}" — ${currentStage.hint}
-Word count so far: ${wordCount}
-
-Give exactly 2 or 3 short, specific, actionable observations. Each one should:
-- Be 1–2 sentences maximum
-- Name something concrete that is missing, underdeveloped, or working well
-- Be written warmly, like a supportive editor — not a critic
-- Reference the story content specifically where possible
-
-Do NOT mention "Story Circle", "stages", "Dan Harmon", or any structural theory by name.
-Do NOT write a preamble or explanation — just the observations, each on its own line, starting with a symbol: ◈
-
-STORY SO FAR:
-${storyText.slice(-1200) || "(The story has not yet begun.)"}`
-      }]
-    })
-  });
-  const data = await response.json();
-  const raw = data.content?.map(b => b.text || "").join("").trim() || "";
-  const points = raw.split("\n").map(l => l.replace(/^◈\s*/, "").trim()).filter(Boolean);
-  return { points, stage: currentStage };
-};
-export default function App() {
+export default function App({ storyId } = {}) {
   const [session, setSession] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [view, setView] = useState("dashboard");
@@ -200,10 +94,18 @@ export default function App() {
     setLoading(true);
     supabase.from("stories").select("*").order("created_at", { ascending: false })
       .then(({ data, error }) => {
-        if (!error) setStories((data || []).map(fromDb));
+        if (!error) {
+          const loaded = (data || []).map(fromDb);
+          setStories(loaded);
+          // Auto-open story from invite link
+          if (storyId) {
+            const target = loaded.find(s => s.id === storyId);
+            if (target) { setActiveStory(target); setView("story"); }
+          }
+        }
         setLoading(false);
       });
-  }, [session]);
+  }, [session]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const openStory = (story) => { setActiveStory(story); setView("story"); };
   const goHome = () => { setView("dashboard"); setActiveStory(null); setEditingStory(null); };
@@ -256,7 +158,7 @@ export default function App() {
     );
   }
 
-  if (!session) return <LoginScreen />;
+  if (!session) return <LoginScreen storyId={storyId} />;
 
   return (
     <div style={styles.root}>
@@ -293,16 +195,21 @@ export default function App() {
 // ══════════════════════════════════════════════════════════════════════════
 // LOGIN SCREEN
 // ══════════════════════════════════════════════════════════════════════════
-function LoginScreen() {
+function LoginScreen({ storyId }) {
   const [email, setEmail] = useState("");
   const [sent, setSent] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
+  const next = storyId ? `/story/${storyId}` : "/";
+  const callbackUrl = typeof window !== "undefined"
+    ? `${window.location.origin}/auth/callback?next=${encodeURIComponent(next)}`
+    : "/auth/callback";
+
   const handleGoogle = async () => {
     await supabase.auth.signInWithOAuth({
       provider: "google",
-      options: { redirectTo: `${window.location.origin}/auth/callback` },
+      options: { redirectTo: callbackUrl },
     });
   };
 
@@ -313,7 +220,7 @@ function LoginScreen() {
     setLoading(true);
     const { error } = await supabase.auth.signInWithOtp({
       email,
-      options: { emailRedirectTo: `${window.location.origin}/auth/callback` },
+      options: { emailRedirectTo: callbackUrl },
     });
     if (error) setError(error.message);
     else setSent(true);
@@ -847,17 +754,6 @@ function EditStory({ story, onCancel, onSave }) {
 function StoryEditor({ story, onBack, onUpdate }) {
   const [text, setText] = useState("");
   const [activePEmail, setActivePEmail] = useState(story.participants[0]?.email || "");
-  const [aiSuggestion, setAiSuggestion] = useState(null);
-  const [loadingAI, setLoadingAI] = useState(false);
-  const [aiError, setAiError] = useState("");
-  const [analysis, setAnalysis] = useState(null);
-  const [loadingAnalysis, setLoadingAnalysis] = useState(false);
-  const [analysisError, setAnalysisError] = useState("");
-  // Panel: null | "muse" | "analysis"
-  const [openPanel, setOpenPanel] = useState(null);
-  // Lock both buttons after use — reset when a new entry is submitted
-  const [musedThisCycle, setMusedThisCycle] = useState(false);
-  const [analysedThisCycle, setAnalysedThisCycle] = useState(false);
   const [turnBased, setTurnBased] = useState(story.turnBased);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [reminderSent, setReminderSent] = useState(new Set());
@@ -901,46 +797,7 @@ function StoryEditor({ story, onBack, onUpdate }) {
     };
     onUpdate(updated);
     setText("");
-    setAiSuggestion(null);
-    setAnalysis(null);
-    setOpenPanel(null);
-    setMusedThisCycle(false);
-    setAnalysedThisCycle(false);
-    setAiError("");
-    setAnalysisError("");
   };
-
-  const handleAISuggest = async () => {
-    if (musedThisCycle) return;
-    const fullText = story.entries.map(e => e.text).join("\n\n");
-    if (!fullText && !text) { setAiError("Write or add something first to get a suggestion."); return; }
-    setLoadingAI(true); setAiError(""); setAiSuggestion(null);
-    setOpenPanel("muse");
-    try {
-      const result = await getAISuggestion(fullText + (text ? "\n\n" + text : ""), story.entries);
-      setAiSuggestion(result);
-      setMusedThisCycle(true);
-    } catch (e) {
-      setAiError("The Muse is silent. Please try again.");
-    } finally { setLoadingAI(false); }
-  };
-
-  const handleAnalyse = async () => {
-    if (analysedThisCycle) return;
-    const fullText = story.entries.map(e => e.text).join("\n\n");
-    if (!fullText) { setAnalysisError("Add at least one entry before analysing."); setOpenPanel("analysis"); return; }
-    setLoadingAnalysis(true); setAnalysisError(""); setAnalysis(null);
-    setOpenPanel("analysis");
-    try {
-      const result = await getAIAnalysis(fullText, story.entries);
-      setAnalysis(result);
-      setAnalysedThisCycle(true);
-    } catch (e) {
-      setAnalysisError("Couldn't reach the analyst. Please try again.");
-    } finally { setLoadingAnalysis(false); }
-  };
-
-  const closePanel = () => setOpenPanel(null);
 
   const handlePassQuill = async () => {
     const nextIndex = (story.currentTurnIndex + 1) % story.participants.length;
@@ -1103,61 +960,9 @@ function StoryEditor({ story, onBack, onUpdate }) {
             <p style={styles.placeholder}>The page is blank. Begin the story…</p>
           )}
           {story.entries.map((entry, i) => (
-            <EntryBlock key={entry.id} entry={entry} index={i} />
+            <EntryBlock key={entry.id} entry={entry} index={i} isNewAuthor={i === 0 || story.entries[i - 1].author !== entry.author} />
           ))}
           <div ref={bottomRef} />
-        </div>
-
-        {/* ── Slide-up AI panel — sits between scroll and write area ── */}
-        <div style={{
-          ...styles.aiPanel,
-          maxHeight: openPanel ? 320 : 0,
-          opacity: openPanel ? 1 : 0,
-          borderTopWidth: openPanel ? 1 : 0,
-        }}>
-          {openPanel === "muse" && (
-            <div style={styles.aiPanelInner}>
-              <div style={styles.aiPanelHeader}>
-                <span style={styles.aiPanelLabel}>✦ The Muse</span>
-                <button style={styles.aiPanelClose} onClick={closePanel}>✕</button>
-              </div>
-              {loadingAI && <p style={styles.aiPanelLoading}>Listening to the story…</p>}
-              {aiError && <p style={styles.aiPanelError}>{aiError}</p>}
-              {aiSuggestion && (
-                <>
-                  <div style={styles.stageChip}>
-                    Stage {aiSuggestion.stage.num} · {aiSuggestion.stage.name}
-                  </div>
-                  <p style={styles.museText}>"{aiSuggestion.text}"</p>
-                </>
-              )}
-            </div>
-          )}
-          {openPanel === "analysis" && (
-            <div style={styles.aiPanelInner}>
-              <div style={styles.aiPanelHeader}>
-                <span style={{ ...styles.aiPanelLabel, color: "#81B29A" }}>◈ Story Analysis</span>
-                <button style={styles.aiPanelClose} onClick={closePanel}>✕</button>
-              </div>
-              {loadingAnalysis && <p style={styles.aiPanelLoading}>Reading the story…</p>}
-              {analysisError && <p style={styles.aiPanelError}>{analysisError}</p>}
-              {analysis && (
-                <>
-                  <div style={{ ...styles.stageChip, background: "rgba(129,178,154,0.12)", color: "#81B29A" }}>
-                    Stage {analysis.stage.num} · {analysis.stage.name}
-                  </div>
-                  <ul style={styles.analysisList}>
-                    {analysis.points.map((point, i) => (
-                      <li key={i} style={styles.analysisItem}>
-                        <span style={styles.analysisBullet}>◈</span>
-                        <span>{point}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </>
-              )}
-            </div>
-          )}
         </div>
 
         {/* ── Write area — always visible ── */}
@@ -1168,73 +973,47 @@ function StoryEditor({ story, onBack, onUpdate }) {
             </div>
           )}
 
-          <div style={{ ...styles.authorBadge, background: `rgba(${hexToRgb(activeParticipant?.color || "#888")},0.2)`, borderColor: activeParticipant?.color }}>
-            <div style={{ ...styles.authorDot, background: activeParticipant?.color }} />
-            {activeParticipant?.name || activeParticipant?.email}
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+            <div style={{ ...styles.authorBadge, background: `rgba(${hexToRgb(activeParticipant?.color || "#888")},0.2)`, borderColor: activeParticipant?.color }}>
+              <div style={{ ...styles.authorDot, background: activeParticipant?.color }} />
+              {activeParticipant?.name || activeParticipant?.email}
+            </div>
+            <button
+              style={{ ...styles.passQuillBtn, opacity: !canWrite ? 0.4 : 1 }}
+              onClick={() => setShowPassModal(true)}
+              disabled={!canWrite}
+              title="Pass the quill to the next writer"
+            >
+              next writer
+            </button>
           </div>
 
-          <textarea
-            style={{ ...styles.textarea, borderColor: activeParticipant?.color || "#444" }}
-            placeholder={canWrite ? "Continue the story…" : "Wait for your turn…"}
-            value={text}
-            disabled={!canWrite}
-            onChange={e => setText(e.target.value)}
-            onKeyDown={e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) handleSubmit(); }}
-          />
-
-          {/* Action row: Muse | Analyse | Add to Story */}
-          <div style={styles.writeActions}>
-            <div style={styles.aiButtons}>
-              {/* Muse button — temporarily disabled */}
-              <span title="Coming soon" style={{ display: "inline-block", cursor: "not-allowed" }}>
-                <button
-                  style={{
-                    ...styles.aiBtn,
-                    ...styles.aiBtnMuse,
-                    opacity: 0.35,
-                    pointerEvents: "none",
-                  }}
-                  disabled
-                >
-                  <span style={styles.aiBtnIcon}>✦</span>
-                  <span>Muse</span>
-                </button>
-              </span>
-
-              {/* Analyse button — temporarily disabled */}
-              <span title="Coming soon" style={{ display: "inline-block", cursor: "not-allowed" }}>
-                <button
-                  style={{
-                    ...styles.aiBtn,
-                    ...styles.aiBtnAnalyse,
-                    opacity: 0.35,
-                    pointerEvents: "none",
-                  }}
-                  disabled
-                >
-                  <span style={styles.aiBtnIcon}>◈</span>
-                  <span>Analyse</span>
-                </button>
-              </span>
-            </div>
-
-            <div style={{ display: "flex", gap: 8 }}>
-              <button
-                style={{ ...styles.passQuillBtn, opacity: !canWrite ? 0.4 : 1 }}
-                onClick={() => setShowPassModal(true)}
-                disabled={!canWrite}
-                title="Pass the quill to the next writer"
-              >
-                Pass the Quill
-              </button>
-              <button
-                style={{ ...styles.btnPrimary, opacity: (!canWrite || !text.trim()) ? 0.4 : 1 }}
-                onClick={handleSubmit}
-                disabled={!canWrite || !text.trim()}
-              >
-                Add to Story ⌘↵
-              </button>
-            </div>
+          <div style={{ position: "relative" }}>
+            <textarea
+              style={{ ...styles.textarea, borderColor: activeParticipant?.color || "#444", paddingRight: 52 }}
+              placeholder={canWrite ? "Continue the story…" : "Wait for your turn…"}
+              value={text}
+              disabled={!canWrite}
+              onChange={e => setText(e.target.value)}
+              onKeyDown={e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) handleSubmit(); }}
+            />
+            <button
+              style={{
+                position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)",
+                width: 34, height: 34, borderRadius: "50%",
+                background: activeParticipant?.color || "#E07A5F",
+                border: "none", cursor: "pointer",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                opacity: (!canWrite || !text.trim()) ? 0.35 : 1,
+                transition: "opacity 0.15s",
+                fontSize: 16, color: "#fff",
+              }}
+              onClick={handleSubmit}
+              disabled={!canWrite || !text.trim()}
+              title="Add to Story (⌘↵)"
+            >
+              ↑
+            </button>
           </div>
         </div>
       </main>
@@ -1263,16 +1042,14 @@ function StoryEditor({ story, onBack, onUpdate }) {
   );
 }
 
-function EntryBlock({ entry, index }) {
+function EntryBlock({ entry, index, isNewAuthor }) {
   const time = new Date(entry.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   return (
-    <div style={{ ...styles.entryBlock, borderLeft: `3px solid ${entry.color}` }}>
-      <div style={styles.entryMeta}>
-        <div style={{ ...styles.authorDot, background: entry.color }} />
-        <span style={{ ...styles.entryAuthor, color: entry.color }}>{entry.author}</span>
-        <span style={styles.entryTime}>{time}</span>
+    <div style={{ ...styles.entryBlock, borderLeft: `3px solid ${entry.color}`, marginTop: isNewAuthor && index !== 0 ? 24 : 2, marginBottom: 0 }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+        <p style={{ ...styles.entryText, margin: 0 }}>{entry.text}</p>
+        <span style={{ ...styles.entryTime, flexShrink: 0 }}>{time}</span>
       </div>
-      <p style={styles.entryText}>{entry.text}</p>
     </div>
   );
 }
@@ -1453,8 +1230,8 @@ const styles = {
     fontSize: 12, color: "#81B29A", fontStyle: "italic",
   },
   passQuillBtn: {
-    background: "none", border: "1px solid #3a3a3a", borderRadius: 8,
-    color: "#aaa", cursor: "pointer", fontSize: 13, padding: "10px 16px",
+    background: "none", border: "1px solid #3a3a3a", borderRadius: 20,
+    color: "#aaa", cursor: "pointer", fontSize: 12, padding: "4px 10px",
     fontFamily: "'DM Sans', sans-serif", transition: "all 0.15s",
   },
   stat: { fontSize: 12, color: "#666", margin: "2px 0" },
@@ -1485,7 +1262,7 @@ const styles = {
   },
   authorBadge: {
     display: "inline-flex", alignItems: "center", gap: 8, fontSize: 12,
-    border: "1px solid", borderRadius: 20, padding: "4px 10px", marginBottom: 10,
+    border: "1px solid", borderRadius: 20, padding: "4px 10px",
   },
   textarea: {
     width: "100%", background: "#1a1917", border: "1px solid",
@@ -1496,54 +1273,6 @@ const styles = {
   writeActions: {
     display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 12, gap: 10,
   },
-  aiButtons: { display: "flex", gap: 8 },
-  aiBtn: {
-    display: "flex", alignItems: "center", gap: 6,
-    background: "#1a1917", border: "1px solid", borderRadius: 8,
-    cursor: "pointer", fontSize: 13, padding: "8px 14px",
-    fontFamily: "'DM Sans', sans-serif", transition: "all 0.15s",
-  },
-  aiBtnMuse: { color: "#E07A5F" },
-  aiBtnAnalyse: { color: "#81B29A" },
-  aiBtnIcon: { fontSize: 12 },
-
-  // Slide-up AI panel
-  aiPanel: {
-    borderTop: "1px solid #1f1e1c", borderTopStyle: "solid",
-    background: "#111009", overflow: "hidden",
-    transition: "max-height 0.35s cubic-bezier(0.4,0,0.2,1), opacity 0.3s ease",
-    maxWidth: 720, width: "100%", margin: "0 auto", boxSizing: "border-box",
-    flexShrink: 0,
-  },
-  aiPanelInner: { padding: "16px 32px 20px", overflowY: "auto", maxHeight: 320 },
-  aiPanelHeader: {
-    display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12,
-  },
-  aiPanelLabel: {
-    fontSize: 11, textTransform: "uppercase", letterSpacing: 1.5,
-    color: "#E07A5F", fontWeight: 600,
-  },
-  aiPanelClose: {
-    background: "none", border: "none", color: "#555", cursor: "pointer", fontSize: 14,
-  },
-  aiPanelLoading: { color: "#555", fontSize: 13, fontStyle: "italic", margin: 0 },
-  aiPanelError: { color: "#E07A5F", fontSize: 13, margin: 0 },
-  stageChip: {
-    display: "inline-block", fontSize: 10, textTransform: "uppercase",
-    letterSpacing: 1.5, color: "#E07A5F", background: "rgba(224,122,95,0.12)",
-    padding: "3px 10px", borderRadius: 20, marginBottom: 12,
-  },
-  museText: {
-    fontFamily: "'Playfair Display', serif", fontSize: 16, lineHeight: 1.8,
-    color: "#b8b0a0", margin: 0, fontStyle: "italic",
-  },
-  analysisList: { margin: 0, padding: 0, listStyle: "none", display: "flex", flexDirection: "column", gap: 12 },
-  analysisItem: {
-    display: "flex", gap: 10, alignItems: "flex-start",
-    fontSize: 14, color: "#c8c0b0", lineHeight: 1.6,
-  },
-  analysisBullet: { color: "#81B29A", flexShrink: 0, marginTop: 2, fontSize: 12 },
-
   // Shared buttons
   btnPrimary: {
     background: "#E07A5F", color: "#fff", border: "none", borderRadius: 8,
