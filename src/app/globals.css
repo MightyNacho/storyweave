@@ -42,6 +42,11 @@ a {
   text-decoration: none;
 }
 
+/* Slim scrollbar for story scroll area */
+.story-scroll::-webkit-scrollbar { width: 4px; }
+.story-scroll::-webkit-scrollbar-track { background: transparent; }
+.story-scroll::-webkit-scrollbar-thumb { background: #333; border-radius: 4px; }
+
 @media (prefers-color-scheme: dark) {
   html {
     color-scheme: dark;

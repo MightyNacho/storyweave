@@ -92,19 +92,32 @@ export default function App({ storyId } = {}) {
   useEffect(() => {
     if (!session) { setLoading(false); return; }
     setLoading(true);
-    supabase.from("stories").select("*").order("created_at", { ascending: false })
-      .then(({ data, error }) => {
-        if (!error) {
-          const loaded = (data || []).map(fromDb);
-          setStories(loaded);
-          // Auto-open story from invite link
-          if (storyId) {
-            const target = loaded.find(s => s.id === storyId);
-            if (target) { setActiveStory(target); setView("story"); }
+    const load = async () => {
+      const { data, error } = await supabase.from("stories").select("*").order("created_at", { ascending: false });
+      if (!error) {
+        const loaded = (data || []).map(fromDb);
+        setStories(loaded);
+        // Auto-open story from invite link
+        if (storyId) {
+          const target = loaded.find(s => s.id === storyId);
+          if (target) {
+            setActiveStory(target); setView("story");
+          } else {
+            // Collaborator: story not in their own list, fetch it directly
+            const { data: sharedData } = await supabase
+              .from("stories").select("*").eq("id", storyId).single();
+            if (sharedData) {
+              const sharedStory = fromDb(sharedData);
+              setStories(prev => [sharedStory, ...prev]);
+              setActiveStory(sharedStory);
+              setView("story");
+            }
           }
         }
-        setLoading(false);
-      });
+      }
+      setLoading(false);
+    };
+    load();
   }, [session]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const openStory = (story) => { setActiveStory(story); setView("story"); };
@@ -186,6 +199,9 @@ export default function App({ storyId } = {}) {
           story={activeStory}
           onBack={goHome}
           onUpdate={updateActiveStory}
+          onEdit={() => startEdit(activeStory)}
+          userEmail={session.user.email}
+          userId={session.user.id}
         />
       )}
     </div>
@@ -337,7 +353,7 @@ function Dashboard({ stories, loading, user, onOpen, onDelete, onEdit, onCreate,
       ) : (
         <div style={styles.grid}>
           {stories.map(s => (
-            <StoryCard key={s.id} story={s} onOpen={onOpen} onDelete={onDelete} onEdit={onEdit} />
+            <StoryCard key={s.id} story={s} onOpen={onOpen} onDelete={onDelete} onEdit={onEdit} userId={user.id} />
           ))}
         </div>
       )}
@@ -345,7 +361,8 @@ function Dashboard({ stories, loading, user, onOpen, onDelete, onEdit, onCreate,
   );
 }
 
-function StoryCard({ story, onOpen, onDelete, onEdit }) {
+function StoryCard({ story, onOpen, onDelete, onEdit, userId }) {
+  const isCreator = story.creatorId === userId;
   const [menuOpen, setMenuOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const preview = story.entries.map(e => e.text).join(" ").slice(0, 120);
@@ -402,10 +419,14 @@ function StoryCard({ story, onOpen, onDelete, onEdit }) {
                   onClick={e => { e.stopPropagation(); setMenuOpen(false); }}
                 />
                 <div style={styles.dropdown}>
-                  <button style={styles.dropdownItem} onClick={handleEdit}>
-                    <span style={styles.dropdownIcon}>✎</span> Edit
-                  </button>
-                  <div style={styles.dropdownDivider} />
+                  {isCreator && (
+                    <>
+                      <button style={styles.dropdownItem} onClick={handleEdit}>
+                        <span style={styles.dropdownIcon}>✎</span> Edit
+                      </button>
+                      <div style={styles.dropdownDivider} />
+                    </>
+                  )}
                   <button style={{ ...styles.dropdownItem, color: "#BC4749" }} onClick={handleDelete}>
                     <span style={styles.dropdownIcon}>⌫</span> Delete
                   </button>
@@ -418,9 +439,9 @@ function StoryCard({ story, onOpen, onDelete, onEdit }) {
         <h2 style={styles.cardTitle}>{story.title}</h2>
         <p style={styles.cardPreview}>{preview || "No entries yet…"}</p>
         <div style={styles.cardAuthors}>
-          {story.participants.slice(0, 5).map(p => (
+          {story.participants.slice(0, 5).map((p, i) => (
             <div
-              key={p.email}
+              key={`${p.email}-${i}`}
               title={p.name || p.email}
               style={{ ...styles.authorDot, background: p.color }}
             />
@@ -751,9 +772,9 @@ function EditStory({ story, onCancel, onSave }) {
     </div>
   );
 }
-function StoryEditor({ story, onBack, onUpdate }) {
+function StoryEditor({ story, onBack, onUpdate, onEdit, userEmail, userId }) {
+  const isCreator = story.creatorId === userId;
   const [text, setText] = useState("");
-  const [activePEmail, setActivePEmail] = useState(story.participants[0]?.email || "");
   const [turnBased, setTurnBased] = useState(story.turnBased);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [reminderSent, setReminderSent] = useState(new Set());
@@ -770,7 +791,7 @@ function StoryEditor({ story, onBack, onUpdate }) {
     setReminderSent(new Set());
   }, [story.currentTurnIndex]);
 
-  const activeParticipant = story.participants.find(p => p.email === activePEmail) || story.participants[0];
+  const activeParticipant = story.participants.find(p => p.email === userEmail) || story.participants[0];
   const currentTurnParticipant = story.participants[story.currentTurnIndex % story.participants.length];
 
   const canWrite = !turnBased || activeParticipant?.email === currentTurnParticipant?.email;
@@ -793,7 +814,6 @@ function StoryEditor({ story, onBack, onUpdate }) {
       ...story,
       turnBased,
       entries: [...story.entries, newEntry],
-      currentTurnIndex: story.currentTurnIndex + 1,
     };
     onUpdate(updated);
     setText("");
@@ -861,7 +881,12 @@ function StoryEditor({ story, onBack, onUpdate }) {
         ...styles.sidebar,
         transform: sidebarOpen ? "translateX(0)" : "translateX(-100%)",
       }}>
-        <button style={styles.backBtn} onClick={onBack}>← Stories</button>
+        <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+          <button style={styles.pillBtn} onClick={onBack}>← Stories</button>
+          {isCreator && (
+            <button style={styles.pillBtn} onClick={onEdit}>✎ Edit</button>
+          )}
+        </div>
         <h2 style={styles.sideTitle}>{story.title}</h2>
         {story.genre && <p style={styles.sideGenre}>{story.genre}</p>}
 
@@ -871,8 +896,8 @@ function StoryEditor({ story, onBack, onUpdate }) {
         <div style={styles.toggleRow}>
           <span style={{ ...styles.toggleLabel, fontSize: 11 }}>Free for All</span>
           <div
-            style={{ ...styles.toggle, background: turnBased ? "#E07A5F" : "#3a3a3a", transform: "scale(0.85)" }}
-            onClick={toggleMode}
+            style={{ ...styles.toggle, background: turnBased ? "#E07A5F" : "#3a3a3a", transform: "scale(0.85)", opacity: isCreator ? 1 : 0.4, cursor: isCreator ? "pointer" : "default" }}
+            onClick={isCreator ? toggleMode : undefined}
           >
             <div style={{ ...styles.toggleThumb, transform: turnBased ? "translateX(20px)" : "translateX(2px)" }} />
           </div>
@@ -899,10 +924,10 @@ function StoryEditor({ story, onBack, onUpdate }) {
             key={p.email}
             style={{
               ...styles.participantItem,
-              background: activePEmail === p.email ? `rgba(${hexToRgb(p.color)},0.15)` : "transparent",
-              borderLeft: `3px solid ${activePEmail === p.email ? p.color : "transparent"}`,
+              background: activeParticipant?.email === p.email ? `rgba(${hexToRgb(p.color)},0.15)` : "transparent",
+              borderLeft: `3px solid ${activeParticipant?.email === p.email ? p.color : "transparent"}`,
+              cursor: "default",
             }}
-            onClick={() => setActivePEmail(p.email)}
           >
             <div style={{ ...styles.authorDot, background: p.color }} />
             <div style={{ flex: 1, minWidth: 0, position: "relative" }}>
@@ -910,7 +935,7 @@ function StoryEditor({ story, onBack, onUpdate }) {
                 <div style={styles.reminderFeedback}>Reminder sent</div>
               ) : (
                 <>
-                  <div style={{ ...styles.participantName, color: activePEmail === p.email ? p.color : "#d4cdc0" }}>
+                  <div style={{ ...styles.participantName, color: activeParticipant?.email === p.email ? p.color : "#d4cdc0" }}>
                     {p.name || p.email}
                   </div>
                   {p.name && <div style={styles.participantEmail}>{p.email}</div>}
@@ -955,7 +980,7 @@ function StoryEditor({ story, onBack, onUpdate }) {
         </div>
 
         {/* Story scroll */}
-        <div style={styles.storyScroll}>
+        <div className="story-scroll" style={styles.storyScroll}>
           {story.entries.length === 0 && (
             <p style={styles.placeholder}>The page is blank. Begin the story…</p>
           )}
@@ -967,30 +992,51 @@ function StoryEditor({ story, onBack, onUpdate }) {
 
         {/* ── Write area — always visible ── */}
         <div style={styles.writeArea}>
-          {turnBased && !canWrite && (
-            <div style={styles.notYourTurn}>
-              It's <span style={{ color: currentTurnParticipant?.color }}>{currentTurnParticipant?.name || currentTurnParticipant?.email}</span>'s turn to write.
+<div style={{ display: "flex", alignItems: "center", marginBottom: 10 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flex: 1, overflow: "hidden" }}>
+              {story.participants.map(p => {
+                const isTurn = turnBased
+                  ? p.email === currentTurnParticipant?.email
+                  : p.email === activeParticipant?.email;
+                return isTurn ? (
+                  <div
+                    key={p.email}
+                    style={{
+                      ...styles.authorBadge,
+                      background: `rgba(${hexToRgb(p.color)},0.2)`,
+                      borderColor: p.color,
+                      flexShrink: 0,
+                    }}
+                  >
+                    <div style={{ ...styles.authorDot, background: p.color }} />
+                    <span style={{ color: p.color, fontSize: 12 }}>{p.name || p.email}</span>
+                  </div>
+                ) : (
+                  <div
+                    key={p.email}
+                    title={p.name || p.email}
+                    style={{ ...styles.authorDot, background: p.color, opacity: 0.4, flexShrink: 0 }}
+                  />
+                );
+              })}
             </div>
-          )}
-
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-            <div style={{ ...styles.authorBadge, background: `rgba(${hexToRgb(activeParticipant?.color || "#888")},0.2)`, borderColor: activeParticipant?.color }}>
-              <div style={{ ...styles.authorDot, background: activeParticipant?.color }} />
-              {activeParticipant?.name || activeParticipant?.email}
+            {/* 46px = 34px button + 12px gap, so "next writer" right-edge aligns with textarea right-edge */}
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <button
+                style={{ ...styles.passQuillBtn, opacity: !canWrite ? 0.4 : 1 }}
+                onClick={() => setShowPassModal(true)}
+                disabled={!canWrite}
+                title="Pass the quill to the next writer"
+              >
+                next writer
+              </button>
+              <div style={{ width: 34, flexShrink: 0 }} />
             </div>
-            <button
-              style={{ ...styles.passQuillBtn, opacity: !canWrite ? 0.4 : 1 }}
-              onClick={() => setShowPassModal(true)}
-              disabled={!canWrite}
-              title="Pass the quill to the next writer"
-            >
-              next writer
-            </button>
           </div>
 
-          <div style={{ position: "relative" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
             <textarea
-              style={{ ...styles.textarea, borderColor: activeParticipant?.color || "#444", paddingRight: 52 }}
+              style={{ ...styles.textarea, borderColor: activeParticipant?.color || "#444" }}
               placeholder={canWrite ? "Continue the story…" : "Wait for your turn…"}
               value={text}
               disabled={!canWrite}
@@ -999,8 +1045,7 @@ function StoryEditor({ story, onBack, onUpdate }) {
             />
             <button
               style={{
-                position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)",
-                width: 34, height: 34, borderRadius: "50%",
+                flexShrink: 0, width: 34, height: 34, borderRadius: "50%",
                 background: activeParticipant?.color || "#E07A5F",
                 border: "none", cursor: "pointer",
                 display: "flex", alignItems: "center", justifyContent: "center",
@@ -1241,6 +1286,7 @@ const styles = {
   },
   storyScroll: {
     flex: 1, overflowY: "auto", padding: "40px 48px", maxWidth: 720, width: "100%", margin: "0 auto",
+    scrollbarWidth: "thin", scrollbarColor: "#333 transparent",
   },
   placeholder: { color: "#555", fontStyle: "italic", textAlign: "center", marginTop: 60 },
   entryBlock: { marginBottom: 32, paddingLeft: 16 },
@@ -1287,5 +1333,10 @@ const styles = {
   backBtn: {
     background: "none", border: "none", color: "#888", cursor: "pointer",
     fontSize: 13, padding: 0, marginBottom: 16,
+  },
+  pillBtn: {
+    background: "none", border: "1px solid #3a3835", color: "#aaa", cursor: "pointer",
+    fontSize: 12, padding: "5px 12px", borderRadius: 999,
+    fontFamily: "'DM Sans', sans-serif", transition: "border-color 0.15s, color 0.15s",
   },
 };
