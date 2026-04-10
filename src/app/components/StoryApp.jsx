@@ -189,7 +189,7 @@ export default function App({ storyId } = {}) {
         />
       )}
       {view === "create" && (
-        <CreateStory onCancel={goHome} onCreate={createStory} />
+        <CreateStory onCancel={goHome} onCreate={createStory} user={session.user} />
       )}
       {view === "edit" && editingStory && (
         <EditStory story={editingStory} onCancel={goHome} onSave={saveEdit} />
@@ -455,12 +455,15 @@ function StoryCard({ story, onOpen, onDelete, onEdit, userId }) {
 // ══════════════════════════════════════════════════════════════════════════
 // CREATE STORY
 // ══════════════════════════════════════════════════════════════════════════
-function CreateStory({ onCancel, onCreate }) {
+function CreateStory({ onCancel, onCreate, user }) {
+  const creatorName = user?.user_metadata?.full_name || user?.user_metadata?.name || "";
+  const creatorEmail = user?.email || "";
+
   const [title, setTitle] = useState("");
   const [genre, setGenre] = useState("");
   const [turnBased, setTurnBased] = useState(false);
   const [participants, setParticipants] = useState([
-    { name: "", email: "", color: PRESET_COLORS[0] }
+    { name: creatorName, email: creatorEmail, color: PRESET_COLORS[0] }
   ]);
   const [error, setError] = useState("");
   const [sending, setSending] = useState(false);
@@ -546,39 +549,43 @@ function CreateStory({ onCancel, onCreate }) {
 
         <label style={styles.label}>Participants</label>
         <div style={styles.participantList}>
-          {participants.map((p, i) => (
-            <div key={i} style={styles.participantRow}>
-              <input
-                style={{ ...styles.input, flex: "0 0 130px", marginBottom: 0 }}
-                placeholder="Name"
-                value={p.name}
-                onChange={e => updateParticipant(i, "name", e.target.value)}
-              />
-              <input
-                style={{ ...styles.input, flex: 1, marginBottom: 0 }}
-                placeholder={`email@example.com`}
-                value={p.email}
-                onChange={e => updateParticipant(i, "email", e.target.value)}
-              />
-              <div style={styles.colorPickerWrap}>
-                {PRESET_COLORS.map(c => (
-                  <div
-                    key={c}
-                    onClick={() => updateParticipant(i, "color", c)}
-                    style={{
-                      ...styles.colorSwatch,
-                      background: c,
-                      outline: p.color === c ? `2px solid #fff` : "none",
-                      outlineOffset: "2px",
-                    }}
-                  />
-                ))}
+          {participants.map((p, i) => {
+            const isCreatorRow = i === 0;
+            return (
+              <div key={i} style={styles.participantRow}>
+                <input
+                  style={{ ...styles.input, flex: "0 0 130px", marginBottom: 0 }}
+                  placeholder="Name"
+                  value={p.name}
+                  onChange={e => updateParticipant(i, "name", e.target.value)}
+                />
+                <input
+                  style={{ ...styles.input, flex: 1, marginBottom: 0, opacity: isCreatorRow ? 0.6 : 1 }}
+                  placeholder="email@example.com"
+                  value={p.email}
+                  readOnly={isCreatorRow}
+                  onChange={isCreatorRow ? undefined : e => updateParticipant(i, "email", e.target.value)}
+                />
+                <div style={styles.colorPickerWrap}>
+                  {PRESET_COLORS.map(c => (
+                    <div
+                      key={c}
+                      onClick={() => updateParticipant(i, "color", c)}
+                      style={{
+                        ...styles.colorSwatch,
+                        background: c,
+                        outline: p.color === c ? `2px solid #fff` : "none",
+                        outlineOffset: "2px",
+                      }}
+                    />
+                  ))}
+                </div>
+                {!isCreatorRow && (
+                  <button style={styles.removeBtn} onClick={() => removeParticipant(i)}>✕</button>
+                )}
               </div>
-              {participants.length > 1 && (
-                <button style={styles.removeBtn} onClick={() => removeParticipant(i)}>✕</button>
-              )}
-            </div>
-          ))}
+            );
+          })}
           <button style={styles.btnSecondary} onClick={addParticipant}>+ Add Participant</button>
         </div>
 
@@ -776,6 +783,7 @@ function StoryEditor({ story, onBack, onUpdate, onEdit, userEmail, userId }) {
   const isCreator = story.creatorId === userId;
   const [text, setText] = useState("");
   const [turnBased, setTurnBased] = useState(story.turnBased);
+  const [inlineMode, setInlineMode] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [reminderSent, setReminderSent] = useState(new Set());
   const [reminderFeedback, setReminderFeedback] = useState(new Set());
@@ -894,14 +902,26 @@ function StoryEditor({ story, onBack, onUpdate, onEdit, userEmail, userId }) {
 
         <p style={styles.sideLabel}>Mode</p>
         <div style={styles.toggleRow}>
-          <span style={{ ...styles.toggleLabel, fontSize: 11 }}>Free for All</span>
+          <span style={{ ...styles.toggleLabel, fontSize: 11, width: 62, textAlign: "right" }}>Free for All</span>
           <div
-            style={{ ...styles.toggle, background: turnBased ? "#E07A5F" : "#3a3a3a", transform: "scale(0.85)", opacity: isCreator ? 1 : 0.4, cursor: isCreator ? "pointer" : "default" }}
+            style={{ ...styles.toggle, background: turnBased ? "#E07A5F" : "#3a3a3a", transform: "scale(0.85)", opacity: isCreator ? 1 : 0.4, cursor: isCreator ? "pointer" : "default", flexShrink: 0 }}
             onClick={isCreator ? toggleMode : undefined}
           >
             <div style={{ ...styles.toggleThumb, transform: turnBased ? "translateX(20px)" : "translateX(2px)" }} />
           </div>
           <span style={{ ...styles.toggleLabel, fontSize: 11 }}>Turn-Based</span>
+        </div>
+
+        <p style={{ ...styles.sideLabel, marginTop: 12 }}>Layout</p>
+        <div style={styles.toggleRow}>
+          <span style={{ ...styles.toggleLabel, fontSize: 11, width: 62, textAlign: "right" }}>Entries</span>
+          <div
+            style={{ ...styles.toggle, background: inlineMode ? "#E07A5F" : "#3a3a3a", transform: "scale(0.85)", flexShrink: 0 }}
+            onClick={() => setInlineMode(m => !m)}
+          >
+            <div style={{ ...styles.toggleThumb, transform: inlineMode ? "translateX(20px)" : "translateX(2px)" }} />
+          </div>
+          <span style={{ ...styles.toggleLabel, fontSize: 11 }}>Book</span>
         </div>
 
         {turnBased && (
@@ -984,9 +1004,28 @@ function StoryEditor({ story, onBack, onUpdate, onEdit, userEmail, userId }) {
           {story.entries.length === 0 && (
             <p style={styles.placeholder}>The page is blank. Begin the story…</p>
           )}
-          {story.entries.map((entry, i) => (
-            <EntryBlock key={entry.id} entry={entry} index={i} isNewAuthor={i === 0 || story.entries[i - 1].author !== entry.author} />
-          ))}
+          {inlineMode ? (
+            <p style={{ ...styles.entryText, margin: 0 }}>
+              {story.entries.map((entry, i) => {
+                const authorChanged = i > 0 && story.entries[i - 1].email !== entry.email;
+                return (
+                  <span key={entry.id}>
+                    {authorChanged && (
+                      <span style={{
+                        display: "inline-block", width: 7, height: 7, borderRadius: "50%",
+                        background: entry.color, margin: "0 8px", verticalAlign: "middle",
+                      }} />
+                    )}
+                    <span style={{ whiteSpace: "pre-wrap" }}>{entry.text}</span>{" "}
+                  </span>
+                );
+              })}
+            </p>
+          ) : (
+            story.entries.map((entry) => (
+              <EntryBlock key={entry.id} entry={entry} />
+            ))
+          )}
           <div ref={bottomRef} />
         </div>
 
@@ -1087,14 +1126,32 @@ function StoryEditor({ story, onBack, onUpdate, onEdit, userEmail, userId }) {
   );
 }
 
-function EntryBlock({ entry, index, isNewAuthor }) {
+function EntryBlock({ entry }) {
   const time = new Date(entry.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const [showTime, setShowTime] = useState(false);
+  const touchStartX = useRef(null);
+
+  const handleTouchStart = (e) => {
+    touchStartX.current = e.touches[0].clientX;
+  };
+  const handleTouchEnd = (e) => {
+    if (touchStartX.current === null) return;
+    const delta = e.changedTouches[0].clientX - touchStartX.current;
+    if (delta < -40) setShowTime(true);
+    else if (delta > 40) setShowTime(false);
+    touchStartX.current = null;
+  };
+
   return (
-    <div style={{ ...styles.entryBlock, borderLeft: `3px solid ${entry.color}`, marginTop: isNewAuthor && index !== 0 ? 24 : 2, marginBottom: 0 }}>
-      <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-        <p style={{ ...styles.entryText, margin: 0 }}>{entry.text}</p>
-        <span style={{ ...styles.entryTime, flexShrink: 0 }}>{time}</span>
-      </div>
+    <div
+      style={{ ...styles.entryBlock, borderLeft: `3px solid ${entry.color}`, position: "relative" }}
+      onMouseEnter={() => setShowTime(true)}
+      onMouseLeave={() => setShowTime(false)}
+      onTouchStart={handleTouchStart}
+      onTouchEnd={handleTouchEnd}
+    >
+      <p style={{ ...styles.entryText, margin: 0 }}>{entry.text}</p>
+      <span style={{ ...styles.entryTime, position: "absolute", top: 0, right: 0, opacity: showTime ? 1 : 0, transition: "opacity 0.15s" }}>{time}</span>
     </div>
   );
 }
@@ -1285,17 +1342,17 @@ const styles = {
     flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", width: "100%",
   },
   storyScroll: {
-    flex: 1, overflowY: "auto", padding: "40px 48px", maxWidth: 720, width: "100%", margin: "0 auto",
+    flex: 1, overflowY: "auto", padding: "40px 20px", maxWidth: 720, width: "100%", margin: "0 auto",
     scrollbarWidth: "thin", scrollbarColor: "#333 transparent",
   },
   placeholder: { color: "#555", fontStyle: "italic", textAlign: "center", marginTop: 60 },
-  entryBlock: { marginBottom: 32, paddingLeft: 16 },
+  entryBlock: { marginBottom: 0, paddingLeft: 10 },
   entryMeta: { display: "flex", alignItems: "center", gap: 8, marginBottom: 8 },
   entryAuthor: { fontSize: 12, fontWeight: 500 },
   entryTime: { fontSize: 11, color: "#555", marginLeft: "auto" },
   entryText: {
-    fontFamily: "'Playfair Display', serif", fontSize: 17, lineHeight: 1.85,
-    color: "#d4cdc0", margin: 0,
+    fontFamily: "'Playfair Display', serif", fontSize: 16, lineHeight: 1.75,
+    color: "#d4cdc0", margin: 0, padding: "2px 0", whiteSpace: "pre-wrap",
   },
 
   writeArea: {
