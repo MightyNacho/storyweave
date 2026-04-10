@@ -788,7 +788,10 @@ function StoryEditor({ story, onBack, onUpdate, onEdit, userEmail, userId }) {
   const [reminderSent, setReminderSent] = useState(new Set());
   const [reminderFeedback, setReminderFeedback] = useState(new Set());
   const [showPassModal, setShowPassModal] = useState(false);
+  const [showTopBar, setShowTopBar] = useState(false);
   const bottomRef = useRef(null);
+  const scrollRef = useRef(null);
+  const lastScrollY = useRef(0);
 
   useEffect(() => {
     const t = setTimeout(() => setSidebarOpen(false), 2000);
@@ -806,6 +809,11 @@ function StoryEditor({ story, onBack, onUpdate, onEdit, userEmail, userId }) {
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    const el = scrollRef.current;
+    if (el) {
+      const canScroll = el.scrollHeight > el.clientHeight;
+      setShowTopBar(!canScroll);
+    }
   }, [story.entries]);
 
   const handleSubmit = () => {
@@ -989,7 +997,7 @@ function StoryEditor({ story, onBack, onUpdate, onEdit, userEmail, userId }) {
       {/* Main canvas */}
       <main style={styles.canvas}>
         {/* Top bar with sidebar toggle */}
-        <div style={styles.canvasTopBar}>
+        <div style={{ ...styles.canvasTopBar, opacity: showTopBar ? 1 : 0, pointerEvents: showTopBar ? "auto" : "none", transition: "opacity 0.2s" }}>
           <button
             style={styles.sidebarToggleBtn}
             onClick={() => setSidebarOpen(o => !o)}
@@ -1000,7 +1008,25 @@ function StoryEditor({ story, onBack, onUpdate, onEdit, userEmail, userId }) {
         </div>
 
         {/* Story scroll */}
-        <div className="story-scroll" style={styles.storyScroll}>
+        <div
+          ref={(el) => {
+            scrollRef.current = el;
+            if (el) {
+              const canScroll = el.scrollHeight > el.clientHeight;
+              setShowTopBar(!canScroll || el.scrollTop === 0);
+            }
+          }}
+          className="story-scroll"
+          style={styles.storyScroll}
+          onScroll={(e) => {
+            const el = e.currentTarget;
+            const current = el.scrollTop;
+            if (current === 0) setShowTopBar(true);
+            else if (current < lastScrollY.current - 5) setShowTopBar(true);
+            else if (current > lastScrollY.current + 5) setShowTopBar(false);
+            lastScrollY.current = current;
+          }}
+        >
           {story.entries.length === 0 && (
             <p style={styles.placeholder}>The page is blank. Begin the story…</p>
           )}
