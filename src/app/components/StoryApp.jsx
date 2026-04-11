@@ -429,11 +429,11 @@ function StoryCard({ story, onOpen, onDelete, onEdit, userId }) {
                         <span style={styles.dropdownIcon}>✎</span> Edit
                       </button>
                       <div style={styles.dropdownDivider} />
+                      <button style={{ ...styles.dropdownItem, color: "#BC4749" }} onClick={handleDelete}>
+                        <span style={styles.dropdownIcon}>⌫</span> Delete
+                      </button>
                     </>
                   )}
-                  <button style={{ ...styles.dropdownItem, color: "#BC4749" }} onClick={handleDelete}>
-                    <span style={styles.dropdownIcon}>⌫</span> Delete
-                  </button>
                 </div>
               </>
             )}
