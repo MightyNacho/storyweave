@@ -144,6 +144,10 @@ export default function App({ storyId } = {}) {
       const created = fromDb(data);
       setStories(prev => prev.map(s => s.id === newStory.id ? created : s));
       setActiveStory(prev => prev?.id === newStory.id ? created : prev);
+      // Send invites after DB insert so the link contains the real UUID
+      sendInvites(created, created.participants).catch(err =>
+        console.error("Invite email error:", err.message)
+      );
     }
   };
 
@@ -466,7 +470,6 @@ function CreateStory({ onCancel, onCreate, user }) {
     { name: creatorName, email: creatorEmail, color: PRESET_COLORS[0] }
   ]);
   const [error, setError] = useState("");
-  const [sending, setSending] = useState(false);
 
   const addParticipant = () => {
     if (participants.length >= 10) return;
@@ -503,13 +506,6 @@ function CreateStory({ onCancel, onCreate, user }) {
       currentTurnIndex: 0,
       createdAt: new Date().toISOString(),
     };
-    setSending(true);
-    try {
-      await sendInvites(story, validP);
-    } catch (err) {
-      console.error("Invite email error:", err.message);
-    }
-    setSending(false);
     onCreate(story);
   };
 
@@ -592,11 +588,10 @@ function CreateStory({ onCancel, onCreate, user }) {
         {error && <p style={styles.errorText}>{error}</p>}
 
         <button
-          style={{ ...styles.btnPrimary, width: "100%", marginTop: 24, opacity: sending ? 0.7 : 1 }}
+          style={{ ...styles.btnPrimary, width: "100%", marginTop: 24 }}
           onClick={handleCreate}
-          disabled={sending}
         >
-          {sending ? "Sending invites…" : "Start Writing →"}
+          Start Writing →
         </button>
       </div>
     </div>
