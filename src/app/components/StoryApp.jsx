@@ -190,6 +190,10 @@ export default function App({ storyId } = {}) {
       const created = fromDb(data);
       setStories(prev => prev.map(s => s.id === newStory.id ? created : s));
       setActiveStory(prev => prev?.id === newStory.id ? created : prev);
+      // Send invites after DB insert so the link contains the real UUID
+      sendInvites(created, created.participants).catch(err =>
+        console.error("Invite email error:", err.message)
+      );
     }
   };
 
@@ -471,11 +475,11 @@ function StoryCard({ story, onOpen, onDelete, onEdit, userId }) {
                         <span style={styles.dropdownIcon}>✎</span> Edit
                       </button>
                       <div style={styles.dropdownDivider} />
+                      <button style={{ ...styles.dropdownItem, color: "#BC4749" }} onClick={handleDelete}>
+                        <span style={styles.dropdownIcon}>⌫</span> Delete
+                      </button>
                     </>
                   )}
-                  <button style={{ ...styles.dropdownItem, color: "#BC4749" }} onClick={handleDelete}>
-                    <span style={styles.dropdownIcon}>⌫</span> Delete
-                  </button>
                 </div>
               </>
             )}
@@ -515,7 +519,6 @@ function CreateStory({ onCancel, onCreate, user }) {
   const [openInviteExpiresAt, setOpenInviteExpiresAt] = useState(null);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState("");
-  const [sending, setSending] = useState(false);
 
   const handleShareLink = () => {
     const expiresAt = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString();
@@ -561,13 +564,6 @@ function CreateStory({ onCancel, onCreate, user }) {
       currentTurnIndex: 0,
       createdAt: new Date().toISOString(),
     };
-    setSending(true);
-    try {
-      await sendInvites(story, validP);
-    } catch (err) {
-      console.error("Invite email error:", err.message);
-    }
-    setSending(false);
     onCreate(story);
   };
 
@@ -665,11 +661,10 @@ function CreateStory({ onCancel, onCreate, user }) {
         {error && <p style={styles.errorText}>{error}</p>}
 
         <button
-          style={{ ...styles.btnPrimary, width: "100%", marginTop: 24, opacity: sending ? 0.7 : 1 }}
+          style={{ ...styles.btnPrimary, width: "100%", marginTop: 24 }}
           onClick={handleCreate}
-          disabled={sending}
         >
-          {sending ? "Sending invites…" : "Start Writing →"}
+          Start Writing →
         </button>
       </div>
     </div>
