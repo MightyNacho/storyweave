@@ -42,13 +42,13 @@ const fromDb = (row) => ({
 });
 
 // ── Email invite helper ────────────────────────────────────────────────────
-// Calls /api/invite when running in your Next.js app.
-// In Claude.ai this will silently do nothing (no backend available).
-const sendInvites = async (story, participants) => {
+// storyId: DB UUID of the story
+// email (optional): invite a single participant; omit to invite all in the story
+const sendInvites = async (storyId, email = null) => {
   const res = await fetch("/api/invite", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ story, participants }),
+    body: JSON.stringify(email ? { storyId, email } : { storyId }),
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
@@ -171,7 +171,7 @@ export default function App({ storyId } = {}) {
       setStories(prev => prev.map(s => s.id === newStory.id ? created : s));
       setActiveStory(prev => prev?.id === newStory.id ? created : prev);
       // Send invites after DB insert so the link contains the real UUID
-      sendInvites(created, created.participants).catch(err =>
+      sendInvites(created.id).catch(err =>
         console.error("Invite email error:", err.message)
       );
     }
@@ -699,7 +699,7 @@ function EditStory({ story, onCancel, onSave }) {
     if (!p.name.trim() || !p.email.includes("@")) return;
     setInviteStatus(s => ({ ...s, [p.email]: "sending" }));
     try {
-      await sendInvites(story, [p]);
+      await sendInvites(story.id, p.email);
       setInviteStatus(s => ({ ...s, [p.email]: "sent" }));
       setTimeout(() => setInviteStatus(s => { const n = { ...s }; delete n[p.email]; return n; }), 3000);
     } catch (err) {
@@ -924,7 +924,7 @@ function StoryEditor({ story, onBack, onUpdate, onEdit, userEmail, userId }) {
       await fetch("/api/notify-turn", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ story: updated, currentParticipant: nextParticipant, previousParticipant: activeParticipant }),
+        body: JSON.stringify({ storyId: updated.id, currentParticipantEmail: nextParticipant.email, previousParticipantEmail: activeParticipant?.email }),
       });
     } catch (err) {
       console.error("Pass quill notify failed:", err);
@@ -945,7 +945,7 @@ function StoryEditor({ story, onBack, onUpdate, onEdit, userEmail, userId }) {
       await fetch("/api/notify-turn", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ story, currentParticipant: p, previousParticipant }),
+        body: JSON.stringify({ storyId: story.id, currentParticipantEmail: p.email, previousParticipantEmail: previousParticipant?.email }),
       });
     } catch (err) {
       console.error("Reminder failed:", err);

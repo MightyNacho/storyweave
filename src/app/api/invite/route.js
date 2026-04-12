@@ -6,7 +6,7 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 const FROM_ADDRESS = process.env.EMAIL_FROM || "Story Weave <noreply@invites.storiesweave.org>";
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
 
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // Escape user-supplied strings before inserting into HTML
 const esc = (str) => String(str ?? "")
@@ -28,26 +28,49 @@ export async function POST(request) {
   if (!user) return Response.json({ error: "Unauthorized." }, { status: 401 });
 
   try {
-    const { story, participants } = await request.json();
+    const body = await request.json().catch(() => ({}));
+    const { storyId, email } = body;
 
-    // ── Input validation ─────────────────────────────────────────────────
-    if (!story || !story.title || typeof story.title !== "string" || story.title.length > 200) {
-      return Response.json({ error: "Invalid story." }, { status: 400 });
-    }
-    if (!Array.isArray(participants) || participants.length === 0 || participants.length > 20) {
-      return Response.json({ error: "Invalid participants list." }, { status: 400 });
-    }
-    for (const p of participants) {
-      if (!p.name || typeof p.name !== "string" || p.name.length > 100) {
-        return Response.json({ error: "Invalid participant name." }, { status: 400 });
-      }
-      if (!p.email || !EMAIL_RE.test(p.email) || p.email.length > 254) {
-        return Response.json({ error: `Invalid email: ${p.email}` }, { status: 400 });
-      }
+    // ── Validate storyId ─────────────────────────────────────────────────
+    if (!storyId || !UUID_RE.test(storyId)) {
+      return Response.json({ error: "Invalid storyId." }, { status: 400 });
     }
 
+    // ── Fetch story from DB (RLS ensures caller is creator or participant) ─
+    const { data: story, error: dbError } = await supabase
+      .from("stories")
+      .select("*")
+      .eq("id", storyId)
+      .single();
+
+    if (dbError || !story) {
+      return Response.json({ error: "Story not found or access denied." }, { status: 404 });
+    }
+
+    const participants = story.participants || [];
+
+    // ── Determine who to invite ──────────────────────────────────────────
+    // If a specific email is provided, invite only that participant (must be in DB).
+    // Otherwise invite all participants listed in the DB.
+    let targets;
+    if (email) {
+      const emailLower = String(email).toLowerCase();
+      const match = participants.find(p => p.email === emailLower);
+      if (!match) {
+        return Response.json({ error: "Participant not found in story." }, { status: 400 });
+      }
+      targets = [match];
+    } else {
+      targets = participants;
+    }
+
+    if (targets.length === 0) {
+      return Response.json({ error: "No participants to invite." }, { status: 400 });
+    }
+
+    // ── Send emails using DB data only ───────────────────────────────────
     const results = await Promise.allSettled(
-      participants.map((participant) =>
+      targets.map((participant) =>
         resend.emails.send({
           from: FROM_ADDRESS,
           to: participant.email,
@@ -82,7 +105,7 @@ export async function POST(request) {
 }
 
 function buildInviteEmail({ story, participant }) {
-  const modeLabel = story.turnBased ? "Turn-Based" : "Free for All";
+  const modeLabel = story.turn_based ? "Turn-Based" : "Free for All";
   const storyUrl = `${APP_URL}/story/${story.id}`;
   const participantCount = Array.isArray(story.participants) ? story.participants.length : 1;
 
@@ -144,7 +167,7 @@ function buildInviteEmail({ story, participant }) {
               </table>
 
               ${
-                story.turnBased
+                story.turn_based
                   ? `<p style="margin:0;font-size:13px;color:#666;line-height:1.6;text-align:center;">
                   This is a turn-based story. You'll receive an email when it's your turn to write.
                 </p>`

@@ -6,6 +6,7 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 const FROM_ADDRESS = process.env.EMAIL_FROM || "Story Weave <noreply@invites.storiesweave.org>";
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 const esc = (str) => String(str ?? "")
@@ -27,23 +28,47 @@ export async function POST(request) {
   if (!user) return Response.json({ error: "Unauthorized." }, { status: 401 });
 
   try {
-    const { story, currentParticipant, previousParticipant } = await request.json();
+    const body = await request.json().catch(() => ({}));
+    const { storyId, currentParticipantEmail, previousParticipantEmail } = body;
 
-    // ── Input validation ─────────────────────────────────────────────────
-    if (!story || !story.title || typeof story.title !== "string" || story.title.length > 200) {
-      return Response.json({ error: "Invalid story." }, { status: 400 });
+    // ── Validate inputs ──────────────────────────────────────────────────
+    if (!storyId || !UUID_RE.test(storyId)) {
+      return Response.json({ error: "Invalid storyId." }, { status: 400 });
     }
-    if (!currentParticipant?.email || !EMAIL_RE.test(currentParticipant.email)) {
+    if (!currentParticipantEmail || !EMAIL_RE.test(currentParticipantEmail)) {
       return Response.json({ error: "Invalid participant email." }, { status: 400 });
     }
-    if (!currentParticipant?.name || typeof currentParticipant.name !== "string" || currentParticipant.name.length > 100) {
-      return Response.json({ error: "Invalid participant name." }, { status: 400 });
+
+    // ── Fetch story from DB (RLS ensures caller is creator or participant) ─
+    const { data: story, error: dbError } = await supabase
+      .from("stories")
+      .select("*")
+      .eq("id", storyId)
+      .single();
+
+    if (dbError || !story) {
+      return Response.json({ error: "Story not found or access denied." }, { status: 404 });
     }
 
+    const participants = story.participants || [];
+
+    // ── Look up participants from DB data only ───────────────────────────
+    const currentParticipant = participants.find(
+      p => p.email === currentParticipantEmail.toLowerCase()
+    );
+    if (!currentParticipant) {
+      return Response.json({ error: "Participant not found in story." }, { status: 400 });
+    }
+
+    const previousParticipant = previousParticipantEmail
+      ? participants.find(p => p.email === previousParticipantEmail.toLowerCase()) ?? null
+      : null;
+
+    // ── Build email from DB data ─────────────────────────────────────────
     const storyUrl = `${APP_URL}/story/${story.id}`;
     const entries = Array.isArray(story.entries) ? story.entries : [];
-    const wordCount = entries.map((e) => e.text).join(" ").split(/\s+/).filter(Boolean).length;
-    const lastEntry = entries[entries.length - 1];
+    const wordCount = entries.map(e => e.text).join(" ").split(/\s+/).filter(Boolean).length;
+    const lastEntry = entries[entries.length - 1] ?? null;
 
     const { data, error } = await resend.emails.send({
       from: FROM_ADDRESS,
