@@ -126,35 +126,15 @@ export default function App({ storyId } = {}) {
         if (target) {
           setActiveStory(target); setView("story");
         } else {
-          // Not in user's list — check for open_invite
-          const { data: row } = await supabase
-            .from("stories")
-            .select("*")
-            .eq("id", storyId)
-            .single();
-
-          if (row?.open_invite_expires_at && new Date(row.open_invite_expires_at) > new Date()) {
-            const usedColors = (row.participants || []).map(p => p.color);
-            const color = PRESET_COLORS.find(c => !usedColors.includes(c)) || PRESET_COLORS[0];
-            const newP = {
-              name: session.user.user_metadata?.full_name
-                || session.user.user_metadata?.name
-                || session.user.email,
-              email: session.user.email.toLowerCase(),
-              color,
-            };
-            const alreadyIn = (row.participants || []).some(p => p.email === newP.email);
-            const updatedParticipants = alreadyIn
-              ? row.participants
-              : [...(row.participants || []), newP];
-
-            if (!alreadyIn) {
-              await supabase
-                .from("stories")
-                .update({ participants: updatedParticipants })
-                .eq("id", storyId);
-            }
-            const joined = fromDb({ ...row, participants: updatedParticipants });
+          // Not in user's list — try to join via invite link
+          const res = await fetch("/api/join", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ storyId }),
+          });
+          if (res.ok) {
+            const { story: row } = await res.json();
+            const joined = fromDb(row);
             setStories(prev => [joined, ...prev]);
             setActiveStory(joined);
             setView("story");
