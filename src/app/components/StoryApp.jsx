@@ -22,6 +22,7 @@ const toDb = (story) => ({
   title: story.title,
   genre: story.genre || "",
   turn_based: story.turnBased,
+  open_invite_expires_at: story.openInviteExpiresAt || null,
   participants: story.participants,
   entries: story.entries,
   current_turn_index: story.currentTurnIndex,
@@ -32,6 +33,7 @@ const fromDb = (row) => ({
   title: row.title,
   genre: row.genre || "",
   turnBased: row.turn_based,
+  openInviteExpiresAt: row.open_invite_expires_at || null,
   participants: row.participants || [],
   entries: row.entries || [],
   currentTurnIndex: row.current_turn_index || 0,
@@ -93,25 +95,69 @@ export default function App({ storyId } = {}) {
     if (!session) { setLoading(false); return; }
     setLoading(true);
     const load = async () => {
-      const { data, error } = await supabase.from("stories").select("*").order("created_at", { ascending: false });
-      if (!error) {
-        const loaded = (data || []).map(fromDb);
-        setStories(loaded);
-        // Auto-open story from invite link
-        if (storyId) {
-          const target = loaded.find(s => s.id === storyId);
-          if (target) {
-            setActiveStory(target); setView("story");
-          } else {
-            // Collaborator: story not in their own list, fetch it directly
-            const { data: sharedData } = await supabase
-              .from("stories").select("*").eq("id", storyId).single();
-            if (sharedData) {
-              const sharedStory = fromDb(sharedData);
-              setStories(prev => [sharedStory, ...prev]);
-              setActiveStory(sharedStory);
-              setView("story");
+      const userEmailLower = session.user.email.toLowerCase();
+
+      const [ownedRes, participatedRes] = await Promise.all([
+        supabase
+          .from("stories")
+          .select("*")
+          .eq("creator_id", session.user.id)
+          .order("created_at", { ascending: false }),
+        supabase
+          .from("stories")
+          .select("*")
+          .filter("participants", "cs", JSON.stringify([{ email: userEmailLower }]))
+          .order("created_at", { ascending: false }),
+      ]);
+
+      const seen = new Set();
+      const allRows = [...(ownedRes.data || []), ...(participatedRes.data || [])].filter(row => {
+        if (seen.has(row.id)) return false;
+        seen.add(row.id);
+        return true;
+      });
+      allRows.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
+      const loaded = allRows.map(fromDb);
+      setStories(loaded);
+
+      if (storyId) {
+        const target = loaded.find(s => s.id === storyId);
+        if (target) {
+          setActiveStory(target); setView("story");
+        } else {
+          // Not in user's list — check for open_invite
+          const { data: row } = await supabase
+            .from("stories")
+            .select("*")
+            .eq("id", storyId)
+            .single();
+
+          if (row?.open_invite_expires_at && new Date(row.open_invite_expires_at) > new Date()) {
+            const usedColors = (row.participants || []).map(p => p.color);
+            const color = PRESET_COLORS.find(c => !usedColors.includes(c)) || PRESET_COLORS[0];
+            const newP = {
+              name: session.user.user_metadata?.full_name
+                || session.user.user_metadata?.name
+                || session.user.email,
+              email: session.user.email.toLowerCase(),
+              color,
+            };
+            const alreadyIn = (row.participants || []).some(p => p.email === newP.email);
+            const updatedParticipants = alreadyIn
+              ? row.participants
+              : [...(row.participants || []), newP];
+
+            if (!alreadyIn) {
+              await supabase
+                .from("stories")
+                .update({ participants: updatedParticipants })
+                .eq("id", storyId);
             }
+            const joined = fromDb({ ...row, participants: updatedParticipants });
+            setStories(prev => [joined, ...prev]);
+            setActiveStory(joined);
+            setView("story");
           }
         }
       }
@@ -137,7 +183,7 @@ export default function App({ storyId } = {}) {
     // Persist to DB and swap in the real UUID
     const { data } = await supabase
       .from("stories")
-      .insert({ ...toDb(newStory), creator_id: session.user.id })
+      .insert({ id: newStory.id, ...toDb(newStory), creator_id: session.user.id })
       .select()
       .single();
     if (data) {
@@ -465,8 +511,19 @@ function CreateStory({ onCancel, onCreate, user }) {
   const [participants, setParticipants] = useState([
     { name: creatorName, email: creatorEmail, color: PRESET_COLORS[0] }
   ]);
+  const [storyId] = useState(() => crypto.randomUUID());
+  const [openInviteExpiresAt, setOpenInviteExpiresAt] = useState(null);
+  const [copied, setCopied] = useState(false);
   const [error, setError] = useState("");
   const [sending, setSending] = useState(false);
+
+  const handleShareLink = () => {
+    const expiresAt = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString();
+    setOpenInviteExpiresAt(expiresAt);
+    navigator.clipboard.writeText(`${window.location.origin}/story/${storyId}`);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
 
   const addParticipant = () => {
     if (participants.length >= 10) return;
@@ -494,11 +551,12 @@ function CreateStory({ onCancel, onCreate, user }) {
       if (!p.email.includes("@")) return setError(`"${p.email}" doesn't look like a valid email.`);
     }
     const story = {
-      id: Date.now().toString(),
+      id: storyId,
       title: title.trim(),
       genre: genre.trim(),
       turnBased,
-      participants: validP,
+      openInviteExpiresAt,
+      participants: validP.map(p => ({ ...p, email: p.email.trim().toLowerCase() })),
       entries: [],
       currentTurnIndex: 0,
       createdAt: new Date().toISOString(),
@@ -589,6 +647,21 @@ function CreateStory({ onCancel, onCreate, user }) {
           <button style={styles.btnSecondary} onClick={addParticipant}>+ Add Participant</button>
         </div>
 
+        <div style={{ marginTop: 16, display: "flex", flexDirection: "column", gap: 8 }}>
+          <label style={styles.label}>Link Sharing</label>
+          <button
+            type="button"
+            style={{
+              ...styles.pillBtn,
+              alignSelf: "flex-start",
+              ...(copied ? { color: "#81B29A", border: "1px solid #81B29A" } : {}),
+            }}
+            onClick={handleShareLink}
+          >
+            {copied ? "Copied link!" : "Share Link"}
+          </button>
+        </div>
+
         {error && <p style={styles.errorText}>{error}</p>}
 
         <button
@@ -613,8 +686,19 @@ function EditStory({ story, onCancel, onSave }) {
   const [participants, setParticipants] = useState(
     story.participants.length > 0 ? story.participants : [{ name: "", email: "", color: PRESET_COLORS[0] }]
   );
+  const [currentExpiresAt, setCurrentExpiresAt] = useState(story.openInviteExpiresAt);
+  const [copied, setCopied] = useState(false);
   const [error, setError] = useState("");
   const [inviteStatus, setInviteStatus] = useState({}); // { email: "sending"|"sent"|"error" }
+
+  const handleShareLink = async () => {
+    const expiresAt = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString();
+    setCurrentExpiresAt(expiresAt);
+    await supabase.from("stories").update({ open_invite_expires_at: expiresAt }).eq("id", story.id);
+    navigator.clipboard.writeText(`${window.location.origin}/story/${story.id}`);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
 
   const originalEmails = new Set(story.participants.map(p => p.email));
 
@@ -663,7 +747,8 @@ function EditStory({ story, onCancel, onSave }) {
       title: title.trim(),
       genre: genre.trim(),
       turnBased,
-      participants: validP,
+      openInviteExpiresAt: currentExpiresAt,
+      participants: validP.map(p => ({ ...p, email: p.email.trim().toLowerCase() })),
     });
   };
 
@@ -770,6 +855,21 @@ function EditStory({ story, onCancel, onSave }) {
           <button style={styles.btnSecondary} onClick={addParticipant}>+ Add Participant</button>
         </div>
 
+        <div style={{ marginTop: 16, display: "flex", flexDirection: "column", gap: 8 }}>
+          <label style={styles.label}>Link Sharing</label>
+          <button
+            type="button"
+            style={{
+              ...styles.pillBtn,
+              alignSelf: "flex-start",
+              ...(copied ? { color: "#81B29A", border: "1px solid #81B29A" } : {}),
+            }}
+            onClick={handleShareLink}
+          >
+            {copied ? "Copied link!" : "Share Link"}
+          </button>
+        </div>
+
         {error && <p style={styles.errorText}>{error}</p>}
 
         <button style={{ ...styles.btnPrimary, width: "100%", marginTop: 24 }} onClick={handleSave}>
@@ -788,6 +888,7 @@ function StoryEditor({ story, onBack, onUpdate, onEdit, userEmail, userId }) {
   const [reminderSent, setReminderSent] = useState(new Set());
   const [reminderFeedback, setReminderFeedback] = useState(new Set());
   const [showPassModal, setShowPassModal] = useState(false);
+  const [copied, setCopied] = useState(false);
   const [showTopBar, setShowTopBar] = useState(false);
   const bottomRef = useRef(null);
   const scrollRef = useRef(null);
@@ -802,7 +903,9 @@ function StoryEditor({ story, onBack, onUpdate, onEdit, userEmail, userId }) {
     setReminderSent(new Set());
   }, [story.currentTurnIndex]);
 
-  const activeParticipant = story.participants.find(p => p.email === userEmail) || story.participants[0];
+  const activeParticipant = story.participants.find(
+    p => p.email.toLowerCase() === userEmail?.toLowerCase()
+  ) || story.participants[0];
   const currentTurnParticipant = story.participants[story.currentTurnIndex % story.participants.length];
 
   const canWrite = !turnBased || activeParticipant?.email === currentTurnParticipant?.email;
@@ -872,6 +975,15 @@ function StoryEditor({ story, onBack, onUpdate, onEdit, userEmail, userId }) {
     } catch (err) {
       console.error("Reminder failed:", err);
     }
+  };
+
+  const handleShareLink = async () => {
+    const expiresAt = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString();
+    const updated = { ...story, openInviteExpiresAt: expiresAt };
+    await onUpdate(updated);
+    navigator.clipboard.writeText(`${window.location.origin}/story/${story.id}`);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   };
 
   const toggleMode = () => {
@@ -987,6 +1099,27 @@ function StoryEditor({ story, onBack, onUpdate, onEdit, userEmail, userId }) {
             </button>
           </div>
         ))}
+
+        {isCreator && (
+          <>
+            <div style={styles.divider} />
+            <p style={styles.sideLabel}>Share Link</p>
+            <button
+              style={{
+                ...styles.pillBtn,
+                ...(copied ? { color: "#81B29A", border: "1px solid #81B29A" } : {}),
+              }}
+              onClick={handleShareLink}
+            >
+              {copied ? "Copied link!" : "Share Link"}
+            </button>
+            {story.openInviteExpiresAt && new Date(story.openInviteExpiresAt) > new Date() && (
+              <p style={{ fontSize: 11, color: "#555", margin: "4px 0 0" }}>
+                Active for 2 days from last share
+              </p>
+            )}
+          </>
+        )}
 
         <div style={styles.divider} />
         <p style={styles.sideLabel}>Stats</p>
