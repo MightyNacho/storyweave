@@ -23,23 +23,27 @@ const toDb = (story) => ({
   genre: story.genre || "",
   turn_based: story.turnBased,
   open_invite_expires_at: story.openInviteExpiresAt || null,
-  participants: story.participants,
+  participants: [...(story.participants || []), ...(story.leftParticipants || [])],
   entries: story.entries,
   current_turn_index: story.currentTurnIndex,
 });
 
-const fromDb = (row) => ({
-  id: row.id,
-  title: row.title,
-  genre: row.genre || "",
-  turnBased: row.turn_based,
-  openInviteExpiresAt: row.open_invite_expires_at || null,
-  participants: row.participants || [],
-  entries: row.entries || [],
-  currentTurnIndex: row.current_turn_index || 0,
-  creatorId: row.creator_id,
-  createdAt: row.created_at,
-});
+const fromDb = (row) => {
+  const allP = row.participants || [];
+  return {
+    id: row.id,
+    title: row.title,
+    genre: row.genre || "",
+    turnBased: row.turn_based,
+    openInviteExpiresAt: row.open_invite_expires_at || null,
+    participants: allP.filter(p => !p.left),
+    leftParticipants: allP.filter(p => p.left),
+    entries: row.entries || [],
+    currentTurnIndex: row.current_turn_index || 0,
+    creatorId: row.creator_id,
+    createdAt: row.created_at,
+  };
+};
 
 // ── Email invite helper ────────────────────────────────────────────────────
 // storyId: DB UUID of the story
@@ -119,7 +123,11 @@ export default function App({ storyId } = {}) {
       });
       allRows.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
 
-      const loaded = allRows.map(fromDb);
+      const loaded = allRows
+        .map(fromDb)
+        .filter(s => !(s.leftParticipants || []).some(
+          p => p.email.toLowerCase() === userEmailLower
+        ));
       setStories(loaded);
 
       if (storyId) {
@@ -180,11 +188,17 @@ export default function App({ storyId } = {}) {
   const leaveStory = async (id) => {
     const story = stories.find(s => s.id === id);
     if (!story) return;
-    const updatedParticipants = story.participants.filter(
-      p => p.email.toLowerCase() !== session.user.email.toLowerCase()
+    const userEmailLower = session.user.email.toLowerCase();
+    const markedLeft = story.participants
+      .filter(p => p.email.toLowerCase() === userEmailLower)
+      .map(p => ({ ...p, left: true }));
+    const remaining = story.participants.filter(
+      p => p.email.toLowerCase() !== userEmailLower
     );
     setStories(prev => prev.filter(s => s.id !== id));
-    await supabase.from("stories").update({ participants: updatedParticipants }).eq("id", id);
+    await supabase.from("stories").update({
+      participants: [...remaining, ...(story.leftParticipants || []), ...markedLeft],
+    }).eq("id", id);
   };
 
   const startEdit = (story) => { setEditingStory(story); setView("edit"); };
@@ -572,9 +586,12 @@ function ShareModal({ story, onClose, onUpdate }) {
     setInviteStatus(s => ({ ...s, [emailLower]: "sending" }));
 
     // Add to DB first (invite API requires participant to exist in story)
-    const newParticipants = [...currentStory.participants, { name: row.name.trim(), email: emailLower, color: row.color }];
-    await supabase.from("stories").update({ participants: newParticipants }).eq("id", currentStory.id);
-    const updated = { ...currentStory, participants: newParticipants };
+    // Include leftParticipants so the left: true records are preserved in the DB
+    const newActive = [...currentStory.participants, { name: row.name.trim(), email: emailLower, color: row.color }];
+    await supabase.from("stories").update({
+      participants: [...newActive, ...(currentStory.leftParticipants || [])],
+    }).eq("id", currentStory.id);
+    const updated = { ...currentStory, participants: newActive };
     setCurrentStory(updated);
     onUpdate(updated);
 

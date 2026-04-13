@@ -44,7 +44,15 @@ export async function POST(request) {
 
   // ── Add user to participants if not already in ───────────────────────────
   const userEmail = user.email.toLowerCase();
-  const alreadyIn = (story.participants || []).some(p => p.email === userEmail);
+  const allParticipants = story.participants || [];
+  const existingEntry = allParticipants.find(p => p.email === userEmail);
+
+  // Reject users who have explicitly left this story
+  if (existingEntry?.left) {
+    return Response.json({ error: "You have left this story." }, { status: 403 });
+  }
+
+  const alreadyIn = !!existingEntry;
 
   if (!alreadyIn) {
     const usedColors = (story.participants || []).map(p => p.color);
