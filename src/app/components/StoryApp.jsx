@@ -157,31 +157,19 @@ export default function App({ storyId } = {}) {
   };
 
   const createStory = async (newStory) => {
-    // Add creatorId to optimistic story so delete/edit buttons appear immediately
-    const optimistic = { ...newStory, creatorId: session.user.id };
-    setStories(prev => [optimistic, ...prev]);
-    setActiveStory(optimistic);
+    // Build the full story object locally — we don't need the server to give it back
+    const created = { ...newStory, creatorId: session.user.id };
+    setStories(prev => [created, ...prev]);
+    setActiveStory(created);
     setView("story");
-    // Show modal immediately in pending state so it appears without delay
-    setShareModalStory({ ...optimistic, _pending: true });
+    setShareModalStory(created); // open modal immediately, no pending state
 
-    // Persist to DB
-    const { data, error } = await supabase
+    // Fire-and-forget insert — UUID was generated client-side so we have everything we need
+    const { error } = await supabase
       .from("stories")
-      .insert({ id: newStory.id, ...toDb(newStory), creator_id: session.user.id })
-      .select()
-      .single();
+      .insert({ id: newStory.id, ...toDb(newStory), creator_id: session.user.id });
 
-    if (error) {
-      console.error("Story creation failed:", error);
-      return;
-    }
-    if (data) {
-      const created = fromDb(data);
-      setStories(prev => prev.map(s => s.id === newStory.id ? created : s));
-      setActiveStory(prev => prev?.id === newStory.id ? created : prev);
-      setShareModalStory(created); // replace pending modal with real story
-    }
+    if (error) console.error("Story creation failed:", error);
   };
 
   const deleteStory = async (id) => {
@@ -553,7 +541,6 @@ function ShareModal({ story, onClose, onUpdate }) {
   const [rows, setRows] = useState([{ name: "", email: "", color: "" }]);
   const [inviteStatus, setInviteStatus] = useState({});
   const [copied, setCopied] = useState(false);
-  const pending = currentStory._pending === true;
 
   const nextColor = (existingStory) => {
     const used = existingStory.participants.map(p => p.color);
@@ -564,11 +551,6 @@ function ShareModal({ story, onClose, onUpdate }) {
   useEffect(() => {
     setRows([{ name: "", email: "", color: nextColor(currentStory) }]);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Sync when parent resolves the pending story (DB insert completes)
-  useEffect(() => {
-    if (!story._pending) setCurrentStory(story);
-  }, [story]);
 
   const addRow = () => {
     const color = nextColor({ participants: [...currentStory.participants, ...rows.filter(r => r.email)] });
@@ -626,18 +608,15 @@ function ShareModal({ story, onClose, onUpdate }) {
       <div style={{ ...styles.modal, maxWidth: 480, width: "100%" }} onClick={e => e.stopPropagation()}>
         <h2 style={{ ...styles.modalTitle, marginBottom: 4 }}>Invite Collaborators</h2>
         <p style={{ ...styles.modalBody, marginBottom: 20 }}>
-          {pending
-            ? "Saving your story…"
-            : <>Add writers to <em>{currentStory.title}</em> by email, or share an open link.</>
-          }
+          Add writers to <em>{currentStory.title}</em> by email, or share an open link.
         </p>
 
         {/* Participant rows */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 12, opacity: pending ? 0.4 : 1 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 12 }}>
           {rows.map((row, i) => {
             const emailLower = row.email.trim().toLowerCase();
             const status = inviteStatus[emailLower];
-            const canInvite = !pending && row.name.trim() && emailLower.includes("@");
+            const canInvite = row.name.trim() && emailLower.includes("@");
             return (
               <div key={i} style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -645,14 +624,12 @@ function ShareModal({ story, onClose, onUpdate }) {
                     style={{ ...styles.input, flex: "0 0 130px", marginBottom: 0 }}
                     placeholder="Name"
                     value={row.name}
-                    disabled={pending}
                     onChange={e => updateRow(i, "name", e.target.value)}
                   />
                   <input
                     style={{ ...styles.input, flex: 1, marginBottom: 0 }}
                     placeholder="email@example.com"
                     value={row.email}
-                    disabled={pending}
                     onChange={e => updateRow(i, "email", e.target.value)}
                   />
                   {rows.length > 1 && (
@@ -679,7 +656,7 @@ function ShareModal({ story, onClose, onUpdate }) {
             );
           })}
         </div>
-        <button style={{ ...styles.btnSecondary, marginBottom: 20 }} disabled={pending} onClick={addRow}>
+        <button style={{ ...styles.btnSecondary, marginBottom: 20 }} onClick={addRow}>
           + Add Another
         </button>
 
@@ -690,9 +667,7 @@ function ShareModal({ story, onClose, onUpdate }) {
             style={{
               ...styles.pillBtn,
               ...(copied ? { color: "#81B29A", border: "1px solid #81B29A" } : {}),
-              opacity: pending ? 0.4 : 1,
             }}
-            disabled={pending}
             onClick={handleShareLink}
           >
             {copied ? "Link copied!" : "Copy Share Link"}
