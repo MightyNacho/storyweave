@@ -170,14 +170,23 @@ export default function App({ storyId } = {}) {
     setStories(prev => [created, ...prev]);
     setActiveStory(created);
     setView("story");
-    setShareModalStory(created); // open modal immediately, no pending state
+    // Share modal is opened AFTER the insert so the row exists before any
+    // UPDATE (share link / email invite) can run against it.
 
-    // Fire-and-forget insert — UUID was generated client-side so we have everything we need
     const { error } = await supabase
       .from("stories")
       .insert({ id: newStory.id, ...toDb(newStory), creator_id: session.user.id });
 
-    if (error) console.error("Story creation failed:", error);
+    if (error) {
+      console.error("Story creation failed:", error);
+      // Roll back optimistic state so the user isn't stuck on a phantom story
+      setStories(prev => prev.filter(s => s.id !== created.id));
+      setActiveStory(null);
+      setView("create");
+      return;
+    }
+
+    setShareModalStory(created); // safe to open — story now exists in DB
   };
 
   const deleteStory = async (id) => {
