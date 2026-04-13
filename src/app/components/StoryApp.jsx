@@ -64,6 +64,7 @@ export default function App({ storyId } = {}) {
   const [activeStory, setActiveStory] = useState(null);
   const [editingStory, setEditingStory] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [shareModalStory, setShareModalStory] = useState(null);
 
   // Auth state — also handles ?code= PKCE exchange if OAuth redirected to root
   useEffect(() => {
@@ -156,30 +157,46 @@ export default function App({ storyId } = {}) {
   };
 
   const createStory = async (newStory) => {
-    // Optimistic: switch to story view immediately
-    setStories(prev => [newStory, ...prev]);
-    setActiveStory(newStory);
+    // Add creatorId to optimistic story so delete/edit buttons appear immediately
+    const optimistic = { ...newStory, creatorId: session.user.id };
+    setStories(prev => [optimistic, ...prev]);
+    setActiveStory(optimistic);
     setView("story");
-    // Persist to DB and swap in the real UUID
-    const { data } = await supabase
+    // Show modal immediately in pending state so it appears without delay
+    setShareModalStory({ ...optimistic, _pending: true });
+
+    // Persist to DB
+    const { data, error } = await supabase
       .from("stories")
       .insert({ id: newStory.id, ...toDb(newStory), creator_id: session.user.id })
       .select()
       .single();
+
+    if (error) {
+      console.error("Story creation failed:", error);
+      return;
+    }
     if (data) {
       const created = fromDb(data);
       setStories(prev => prev.map(s => s.id === newStory.id ? created : s));
       setActiveStory(prev => prev?.id === newStory.id ? created : prev);
-      // Send invites after DB insert so the link contains the real UUID
-      sendInvites(created.id).catch(err =>
-        console.error("Invite email error:", err.message)
-      );
+      setShareModalStory(created); // replace pending modal with real story
     }
   };
 
   const deleteStory = async (id) => {
     setStories(prev => prev.filter(s => s.id !== id));
     await supabase.from("stories").delete().eq("id", id);
+  };
+
+  const leaveStory = async (id) => {
+    const story = stories.find(s => s.id === id);
+    if (!story) return;
+    const updatedParticipants = story.participants.filter(
+      p => p.email.toLowerCase() !== session.user.email.toLowerCase()
+    );
+    setStories(prev => prev.filter(s => s.id !== id));
+    await supabase.from("stories").update({ participants: updatedParticipants }).eq("id", id);
   };
 
   const startEdit = (story) => { setEditingStory(story); setView("edit"); };
@@ -213,6 +230,7 @@ export default function App({ storyId } = {}) {
           user={session.user}
           onOpen={openStory}
           onDelete={deleteStory}
+          onLeave={leaveStory}
           onEdit={startEdit}
           onCreate={() => setView("create")}
           onSignOut={() => supabase.auth.signOut()}
@@ -232,6 +250,17 @@ export default function App({ storyId } = {}) {
           onEdit={() => startEdit(activeStory)}
           userEmail={session.user.email}
           userId={session.user.id}
+        />
+      )}
+      {shareModalStory && (
+        <ShareModal
+          story={shareModalStory}
+          user={session.user}
+          onClose={() => setShareModalStory(null)}
+          onUpdate={(updated) => {
+            setShareModalStory(updated);
+            updateActiveStory(updated);
+          }}
         />
       )}
     </div>
@@ -351,7 +380,7 @@ const loginStyles = {
 // ══════════════════════════════════════════════════════════════════════════
 // DASHBOARD
 // ══════════════════════════════════════════════════════════════════════════
-function Dashboard({ stories, loading, user, onOpen, onDelete, onEdit, onCreate, onSignOut }) {
+function Dashboard({ stories, loading, user, onOpen, onDelete, onLeave, onEdit, onCreate, onSignOut }) {
   return (
     <div style={styles.page}>
       <header style={styles.header}>
@@ -383,7 +412,7 @@ function Dashboard({ stories, loading, user, onOpen, onDelete, onEdit, onCreate,
       ) : (
         <div style={styles.grid}>
           {stories.map(s => (
-            <StoryCard key={s.id} story={s} onOpen={onOpen} onDelete={onDelete} onEdit={onEdit} userId={user.id} />
+            <StoryCard key={s.id} story={s} onOpen={onOpen} onDelete={onDelete} onLeave={onLeave} onEdit={onEdit} userId={user.id} userEmail={user.email} />
           ))}
         </div>
       )}
@@ -391,10 +420,14 @@ function Dashboard({ stories, loading, user, onOpen, onDelete, onEdit, onCreate,
   );
 }
 
-function StoryCard({ story, onOpen, onDelete, onEdit, userId }) {
+function StoryCard({ story, onOpen, onDelete, onLeave, onEdit, userId, userEmail }) {
   const isCreator = story.creatorId === userId;
+  const isParticipant = !isCreator && story.participants.some(
+    p => p.email.toLowerCase() === userEmail?.toLowerCase()
+  );
   const [menuOpen, setMenuOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [confirmLeave, setConfirmLeave] = useState(false);
   const preview = story.entries.map(e => e.text).join(" ").slice(0, 120);
 
   const handleDelete = (e) => {
@@ -407,6 +440,12 @@ function StoryCard({ story, onOpen, onDelete, onEdit, userId }) {
     e.stopPropagation();
     setMenuOpen(false);
     onEdit(story);
+  };
+
+  const handleLeave = (e) => {
+    e.stopPropagation();
+    setMenuOpen(false);
+    setConfirmLeave(true);
   };
 
   return (
@@ -425,6 +464,25 @@ function StoryCard({ story, onOpen, onDelete, onEdit, userId }) {
                 style={{ ...styles.btnPrimary, background: "#BC4749" }}
                 onClick={() => { setConfirmDelete(false); onDelete(story.id); }}
               >Delete Forever</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Leave confirmation modal */}
+      {confirmLeave && (
+        <div style={styles.modalOverlay} onClick={() => setConfirmLeave(false)}>
+          <div style={styles.modal} onClick={e => e.stopPropagation()}>
+            <h3 style={styles.modalTitle}>Leave this story?</h3>
+            <p style={styles.modalBody}>
+              You'll be removed from <em style={{ color: "#e8e0d0" }}>{story.title}</em>. The story will continue for other collaborators.
+            </p>
+            <div style={styles.modalActions}>
+              <button style={styles.btnSecondary} onClick={() => setConfirmLeave(false)}>Cancel</button>
+              <button
+                style={{ ...styles.btnPrimary, background: "#BC4749" }}
+                onClick={() => { setConfirmLeave(false); onLeave(story.id); }}
+              >Leave Story</button>
             </div>
           </div>
         </div>
@@ -460,6 +518,11 @@ function StoryCard({ story, onOpen, onDelete, onEdit, userId }) {
                       </button>
                     </>
                   )}
+                  {isParticipant && (
+                    <button style={{ ...styles.dropdownItem, color: "#BC4749" }} onClick={handleLeave}>
+                      <span style={styles.dropdownIcon}>✕</span> Leave story
+                    </button>
+                  )}
                 </div>
               </>
             )}
@@ -483,6 +546,168 @@ function StoryCard({ story, onOpen, onDelete, onEdit, userId }) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
+// SHARE MODAL
+// ══════════════════════════════════════════════════════════════════════════
+function ShareModal({ story, onClose, onUpdate }) {
+  const [currentStory, setCurrentStory] = useState(story);
+  const [rows, setRows] = useState([{ name: "", email: "", color: "" }]);
+  const [inviteStatus, setInviteStatus] = useState({});
+  const [copied, setCopied] = useState(false);
+  const pending = currentStory._pending === true;
+
+  const nextColor = (existingStory) => {
+    const used = existingStory.participants.map(p => p.color);
+    return PRESET_COLORS.find(c => !used.includes(c)) || PRESET_COLORS[0];
+  };
+
+  // Initialise first row's color based on story participants
+  useEffect(() => {
+    setRows([{ name: "", email: "", color: nextColor(currentStory) }]);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Sync when parent resolves the pending story (DB insert completes)
+  useEffect(() => {
+    if (!story._pending) setCurrentStory(story);
+  }, [story]);
+
+  const addRow = () => {
+    const color = nextColor({ participants: [...currentStory.participants, ...rows.filter(r => r.email)] });
+    setRows(prev => [...prev, { name: "", email: "", color }]);
+  };
+
+  const updateRow = (i, field, val) => {
+    setRows(prev => { const u = [...prev]; u[i] = { ...u[i], [field]: val }; return u; });
+  };
+
+  const removeRow = (i) => {
+    setRows(prev => prev.filter((_, idx) => idx !== i));
+  };
+
+  const handleSendInvite = async (row, i) => {
+    const emailLower = row.email.trim().toLowerCase();
+    if (!row.name.trim() || !emailLower.includes("@")) return;
+
+    setInviteStatus(s => ({ ...s, [emailLower]: "sending" }));
+
+    // Add to DB first (invite API requires participant to exist in story)
+    const newParticipants = [...currentStory.participants, { name: row.name.trim(), email: emailLower, color: row.color }];
+    await supabase.from("stories").update({ participants: newParticipants }).eq("id", currentStory.id);
+    const updated = { ...currentStory, participants: newParticipants };
+    setCurrentStory(updated);
+    onUpdate(updated);
+
+    // Send invite email
+    try {
+      await sendInvites(currentStory.id, emailLower);
+      setInviteStatus(s => ({ ...s, [emailLower]: "sent" }));
+    } catch {
+      setInviteStatus(s => ({ ...s, [emailLower]: "error" }));
+    }
+
+    setTimeout(() => {
+      setRows(prev => prev.filter((_, idx) => idx !== i));
+      setInviteStatus(s => { const n = { ...s }; delete n[emailLower]; return n; });
+    }, 2000);
+  };
+
+  const handleShareLink = async () => {
+    const expiresAt = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString();
+    await supabase.from("stories").update({ open_invite_expires_at: expiresAt }).eq("id", currentStory.id);
+    const updated = { ...currentStory, openInviteExpiresAt: expiresAt };
+    setCurrentStory(updated);
+    onUpdate(updated);
+    navigator.clipboard.writeText(`${window.location.origin}/story/${currentStory.id}`);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2500);
+  };
+
+  return (
+    <div style={styles.modalOverlay} onClick={onClose}>
+      <div style={{ ...styles.modal, maxWidth: 480, width: "100%" }} onClick={e => e.stopPropagation()}>
+        <h2 style={{ ...styles.modalTitle, marginBottom: 4 }}>Invite Collaborators</h2>
+        <p style={{ ...styles.modalBody, marginBottom: 20 }}>
+          {pending
+            ? "Saving your story…"
+            : <>Add writers to <em>{currentStory.title}</em> by email, or share an open link.</>
+          }
+        </p>
+
+        {/* Participant rows */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 12, opacity: pending ? 0.4 : 1 }}>
+          {rows.map((row, i) => {
+            const emailLower = row.email.trim().toLowerCase();
+            const status = inviteStatus[emailLower];
+            const canInvite = !pending && row.name.trim() && emailLower.includes("@");
+            return (
+              <div key={i} style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <input
+                    style={{ ...styles.input, flex: "0 0 130px", marginBottom: 0 }}
+                    placeholder="Name"
+                    value={row.name}
+                    disabled={pending}
+                    onChange={e => updateRow(i, "name", e.target.value)}
+                  />
+                  <input
+                    style={{ ...styles.input, flex: 1, marginBottom: 0 }}
+                    placeholder="email@example.com"
+                    value={row.email}
+                    disabled={pending}
+                    onChange={e => updateRow(i, "email", e.target.value)}
+                  />
+                  {rows.length > 1 && (
+                    <button style={styles.removeBtn} onClick={() => removeRow(i)}>✕</button>
+                  )}
+                </div>
+                {canInvite && (
+                  <div style={styles.inviteRow}>
+                    <button
+                      style={{
+                        ...styles.inviteBtn,
+                        ...(status === "sent" ? styles.inviteBtnSent : {}),
+                        ...(status === "error" ? { color: "#BC4749", border: "1px solid #BC4749" } : {}),
+                        opacity: status === "sending" ? 0.6 : 1,
+                      }}
+                      disabled={status === "sending" || status === "sent"}
+                      onClick={() => handleSendInvite(row, i)}
+                    >
+                      {status === "sending" ? "Sending…" : status === "sent" ? "Invited!" : status === "error" ? "Failed — retry?" : "Send Invite"}
+                    </button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+        <button style={{ ...styles.btnSecondary, marginBottom: 20 }} disabled={pending} onClick={addRow}>
+          + Add Another
+        </button>
+
+        {/* Share link */}
+        <div style={{ borderTop: "1px solid #2a2825", paddingTop: 16, marginBottom: 24 }}>
+          <label style={{ ...styles.label, marginBottom: 10 }}>Or share an open link <span style={styles.optional}>(2-day access)</span></label>
+          <button
+            style={{
+              ...styles.pillBtn,
+              ...(copied ? { color: "#81B29A", border: "1px solid #81B29A" } : {}),
+              opacity: pending ? 0.4 : 1,
+            }}
+            disabled={pending}
+            onClick={handleShareLink}
+          >
+            {copied ? "Link copied!" : "Copy Share Link"}
+          </button>
+        </div>
+
+        <div style={{ display: "flex", justifyContent: "flex-end" }}>
+          <button style={styles.btnPrimary} onClick={onClose}>Done</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════════
 // CREATE STORY
 // ══════════════════════════════════════════════════════════════════════════
 function CreateStory({ onCancel, onCreate, user }) {
@@ -492,54 +717,17 @@ function CreateStory({ onCancel, onCreate, user }) {
   const [title, setTitle] = useState("");
   const [genre, setGenre] = useState("");
   const [turnBased, setTurnBased] = useState(false);
-  const [participants, setParticipants] = useState([
-    { name: creatorName, email: creatorEmail, color: PRESET_COLORS[0] }
-  ]);
-  const [storyId] = useState(() => crypto.randomUUID());
-  const [openInviteExpiresAt, setOpenInviteExpiresAt] = useState(null);
-  const [copied, setCopied] = useState(false);
   const [error, setError] = useState("");
 
-  const handleShareLink = () => {
-    const expiresAt = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString();
-    setOpenInviteExpiresAt(expiresAt);
-    navigator.clipboard.writeText(`${window.location.origin}/story/${storyId}`);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
-  const addParticipant = () => {
-    if (participants.length >= 10) return;
-    const usedColors = participants.map(p => p.color);
-    const nextColor = PRESET_COLORS.find(c => !usedColors.includes(c)) || PRESET_COLORS[0];
-    setParticipants([...participants, { name: "", email: "", color: nextColor }]);
-  };
-
-  const updateParticipant = (i, field, val) => {
-    const updated = [...participants];
-    updated[i] = { ...updated[i], [field]: val };
-    setParticipants(updated);
-  };
-
-  const removeParticipant = (i) => {
-    setParticipants(participants.filter((_, idx) => idx !== i));
-  };
-
-  const handleCreate = async () => {
+  const handleCreate = () => {
     if (!title.trim()) return setError("Please give your story a title.");
-    const validP = participants.filter(p => p.email.trim() || p.name.trim());
-    if (validP.length === 0) return setError("Add at least one participant.");
-    for (const p of validP) {
-      if (!p.name.trim()) return setError("Every participant needs a name.");
-      if (!p.email.includes("@")) return setError(`"${p.email}" doesn't look like a valid email.`);
-    }
     const story = {
-      id: storyId,
+      id: crypto.randomUUID(),
       title: title.trim(),
       genre: genre.trim(),
       turnBased,
-      openInviteExpiresAt,
-      participants: validP.map(p => ({ ...p, email: p.email.trim().toLowerCase() })),
+      openInviteExpiresAt: null,
+      participants: [{ name: creatorName, email: creatorEmail.toLowerCase(), color: PRESET_COLORS[0] }],
       entries: [],
       currentTurnIndex: 0,
       createdAt: new Date().toISOString(),
@@ -581,70 +769,13 @@ function CreateStory({ onCancel, onCreate, user }) {
           <span style={styles.toggleLabel}>Turn-Based</span>
         </div>
 
-        <label style={styles.label}>Participants</label>
-        <div style={styles.participantList}>
-          {participants.map((p, i) => {
-            const isCreatorRow = i === 0;
-            return (
-              <div key={i} style={styles.participantRow}>
-                <input
-                  style={{ ...styles.input, flex: "0 0 130px", marginBottom: 0 }}
-                  placeholder="Name"
-                  value={p.name}
-                  onChange={e => updateParticipant(i, "name", e.target.value)}
-                />
-                <input
-                  style={{ ...styles.input, flex: 1, marginBottom: 0, opacity: isCreatorRow ? 0.6 : 1 }}
-                  placeholder="email@example.com"
-                  value={p.email}
-                  readOnly={isCreatorRow}
-                  onChange={isCreatorRow ? undefined : e => updateParticipant(i, "email", e.target.value)}
-                />
-                <div style={styles.colorPickerWrap}>
-                  {PRESET_COLORS.map(c => (
-                    <div
-                      key={c}
-                      onClick={() => updateParticipant(i, "color", c)}
-                      style={{
-                        ...styles.colorSwatch,
-                        background: c,
-                        outline: p.color === c ? `2px solid #fff` : "none",
-                        outlineOffset: "2px",
-                      }}
-                    />
-                  ))}
-                </div>
-                {!isCreatorRow && (
-                  <button style={styles.removeBtn} onClick={() => removeParticipant(i)}>✕</button>
-                )}
-              </div>
-            );
-          })}
-          <button style={styles.btnSecondary} onClick={addParticipant}>+ Add Participant</button>
-        </div>
-
-        <div style={{ marginTop: 16, display: "flex", flexDirection: "column", gap: 8 }}>
-          <label style={styles.label}>Link Sharing</label>
-          <button
-            type="button"
-            style={{
-              ...styles.pillBtn,
-              alignSelf: "flex-start",
-              ...(copied ? { color: "#81B29A", border: "1px solid #81B29A" } : {}),
-            }}
-            onClick={handleShareLink}
-          >
-            {copied ? "Copied link!" : "Share Link"}
-          </button>
-        </div>
-
         {error && <p style={styles.errorText}>{error}</p>}
 
         <button
           style={{ ...styles.btnPrimary, width: "100%", marginTop: 24 }}
           onClick={handleCreate}
         >
-          Start Writing →
+          Create Story →
         </button>
       </div>
     </div>
@@ -859,7 +990,9 @@ function StoryEditor({ story, onBack, onUpdate, onEdit, userEmail, userId }) {
   const [text, setText] = useState("");
   const [turnBased, setTurnBased] = useState(story.turnBased);
   const [inlineMode, setInlineMode] = useState(false);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState(() =>
+    typeof window !== "undefined" ? !window.matchMedia("(max-width: 768px)").matches : true
+  );
   const [reminderSent, setReminderSent] = useState(new Set());
   const [reminderFeedback, setReminderFeedback] = useState(new Set());
   const [showPassModal, setShowPassModal] = useState(false);
@@ -868,11 +1001,30 @@ function StoryEditor({ story, onBack, onUpdate, onEdit, userEmail, userId }) {
   const bottomRef = useRef(null);
   const scrollRef = useRef(null);
   const lastScrollY = useRef(0);
+  const touchStartX = useRef(null);
+  const touchStartY = useRef(null);
 
   useEffect(() => {
+    if (window.matchMedia("(max-width: 768px)").matches) return;
     const t = setTimeout(() => setSidebarOpen(false), 2000);
     return () => clearTimeout(t);
   }, []);
+
+  const handleTouchStart = (e) => {
+    touchStartX.current = e.touches[0].clientX;
+    touchStartY.current = e.touches[0].clientY;
+  };
+
+  const handleTouchEnd = (e) => {
+    if (touchStartX.current === null) return;
+    const deltaX = e.changedTouches[0].clientX - touchStartX.current;
+    const deltaY = e.changedTouches[0].clientY - touchStartY.current;
+    if (Math.abs(deltaX) > Math.abs(deltaY) && Math.abs(deltaX) > 50) {
+      setSidebarOpen(deltaX > 0);
+    }
+    touchStartX.current = null;
+    touchStartY.current = null;
+  };
 
   useEffect(() => {
     setReminderSent(new Set());
@@ -970,7 +1122,7 @@ function StoryEditor({ story, onBack, onUpdate, onEdit, userEmail, userId }) {
   const storyText = story.entries.map(e => e.text).join("\n\n");
 
   return (
-    <div style={styles.editorRoot}>
+    <div style={styles.editorRoot} onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd}>
       {/* Sidebar overlay (mobile tap-to-close) */}
       {sidebarOpen && (
         <div
