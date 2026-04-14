@@ -69,6 +69,7 @@ export default function App({ storyId } = {}) {
   const [editingStory, setEditingStory] = useState(null);
   const [loading, setLoading] = useState(true);
   const [shareModalStory, setShareModalStory] = useState(null);
+  const [createError, setCreateError] = useState(null);
 
   // Auth state — also handles ?code= PKCE exchange if OAuth redirected to root
   useEffect(() => {
@@ -165,6 +166,7 @@ export default function App({ storyId } = {}) {
   };
 
   const createStory = async (newStory) => {
+    setCreateError(null);
     // Build the full story object locally — we don't need the server to give it back
     const created = { ...newStory, creatorId: session.user.id };
     setStories(prev => [created, ...prev]);
@@ -179,6 +181,7 @@ export default function App({ storyId } = {}) {
 
     if (error) {
       console.error("Story creation failed:", error);
+      setCreateError(error.message || "Story creation failed. Please try again.");
       // Roll back optimistic state so the user isn't stuck on a phantom story
       setStories(prev => prev.filter(s => s.id !== created.id));
       setActiveStory(null);
@@ -248,7 +251,7 @@ export default function App({ storyId } = {}) {
         />
       )}
       {view === "create" && (
-        <CreateStory onCancel={goHome} onCreate={createStory} user={session.user} />
+        <CreateStory onCancel={goHome} onCreate={createStory} user={session.user} serverError={createError} />
       )}
       {view === "edit" && editingStory && (
         <EditStory story={editingStory} onCancel={goHome} onSave={saveEdit} />
@@ -711,7 +714,7 @@ function ShareModal({ story, onClose, onUpdate }) {
 // ══════════════════════════════════════════════════════════════════════════
 // CREATE STORY
 // ══════════════════════════════════════════════════════════════════════════
-function CreateStory({ onCancel, onCreate, user }) {
+function CreateStory({ onCancel, onCreate, user, serverError }) {
   const creatorName = user?.user_metadata?.full_name || user?.user_metadata?.name || "";
   const creatorEmail = user?.email || "";
 
@@ -771,6 +774,7 @@ function CreateStory({ onCancel, onCreate, user }) {
         </div>
 
         {error && <p style={styles.errorText}>{error}</p>}
+        {serverError && <p style={styles.errorText}>Could not save story: {serverError}</p>}
 
         <button
           style={{ ...styles.btnPrimary, width: "100%", marginTop: 24 }}
