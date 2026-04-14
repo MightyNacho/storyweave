@@ -8,6 +8,12 @@ const PRESET_COLORS = [
 ];
 
 export async function POST(request) {
+  // ── Guard: service role key must be configured ───────────────────────────
+  if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    console.error("/api/join: SUPABASE_SERVICE_ROLE_KEY is not set — add it to your production environment variables");
+    return Response.json({ error: "Server configuration error. Please contact the story creator." }, { status: 500 });
+  }
+
   // ── Auth check (session client, respects RLS) ────────────────────────────
   const cookieStore = await cookies();
   const sessionClient = createServerClient(
@@ -29,12 +35,13 @@ export async function POST(request) {
     process.env.SUPABASE_SERVICE_ROLE_KEY
   );
 
-  const { data: story } = await admin
+  const { data: story, error: adminErr } = await admin
     .from("stories")
     .select("*")
     .eq("id", storyId)
     .single();
 
+  if (adminErr) console.error("/api/join admin SELECT failed:", adminErr.message);
   if (!story) return Response.json({ error: "Story not found." }, { status: 404 });
 
   // ── Check invite link is still active ────────────────────────────────────

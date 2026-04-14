@@ -70,6 +70,7 @@ export default function App({ storyId } = {}) {
   const [loading, setLoading] = useState(true);
   const [shareModalStory, setShareModalStory] = useState(null);
   const [createError, setCreateError] = useState(null);
+  const [joinError, setJoinError] = useState(null);
 
   // Auth state — also handles ?code= PKCE exchange if OAuth redirected to root
   useEffect(() => {
@@ -148,6 +149,9 @@ export default function App({ storyId } = {}) {
             setStories(prev => [joined, ...prev]);
             setActiveStory(joined);
             setView("story");
+          } else {
+            const body = await res.json().catch(() => ({}));
+            setJoinError(body.error || "Could not open the story. The link may have expired.");
           }
         }
       }
@@ -248,6 +252,8 @@ export default function App({ storyId } = {}) {
           onEdit={startEdit}
           onCreate={() => setView("create")}
           onSignOut={() => supabase.auth.signOut()}
+          joinError={joinError}
+          onDismissJoinError={() => setJoinError(null)}
         />
       )}
       {view === "create" && (
@@ -394,9 +400,19 @@ const loginStyles = {
 // ══════════════════════════════════════════════════════════════════════════
 // DASHBOARD
 // ══════════════════════════════════════════════════════════════════════════
-function Dashboard({ stories, loading, user, onOpen, onDelete, onLeave, onEdit, onCreate, onSignOut }) {
+function Dashboard({ stories, loading, user, onOpen, onDelete, onLeave, onEdit, onCreate, onSignOut, joinError, onDismissJoinError }) {
   return (
     <div style={styles.page}>
+      {joinError && (
+        <div style={{ background: "#BC474920", border: "1px solid #BC4749", borderRadius: 8,
+                      padding: "12px 16px", margin: "16px 24px 0", color: "#BC4749",
+                      display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+          <span style={{ fontSize: 14 }}>{joinError}</span>
+          <button onClick={onDismissJoinError}
+                  style={{ background: "none", border: "none", color: "#BC4749", cursor: "pointer",
+                           fontSize: 18, lineHeight: 1, padding: 0, flexShrink: 0 }}>✕</button>
+        </div>
+      )}
       <header style={styles.header}>
         <div>
           <h1 style={styles.logo}>Story Weave</h1>
