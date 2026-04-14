@@ -1087,6 +1087,17 @@ function StoryEditor({ story, onBack, onUpdate, onEdit, userEmail, userId }) {
 
   const canWrite = !turnBased || activeParticipant?.email === currentTurnParticipant?.email;
 
+  const editableIds = new Set();
+  if (canWrite && activeParticipant?.email) {
+    for (let i = story.entries.length - 1; i >= 0; i--) {
+      if (story.entries[i].email.toLowerCase() === activeParticipant.email.toLowerCase()) {
+        editableIds.add(story.entries[i].id);
+      } else {
+        break;
+      }
+    }
+  }
+
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
     const el = scrollRef.current;
@@ -1113,6 +1124,17 @@ function StoryEditor({ story, onBack, onUpdate, onEdit, userEmail, userId }) {
     };
     onUpdate(updated);
     setText("");
+  };
+
+  const handleEditEntry = (entryId, newText) => {
+    if (!newText.trim()) return;
+    const updated = {
+      ...story,
+      entries: story.entries.map(e =>
+        e.id === entryId ? { ...e, text: newText.trim() } : e
+      ),
+    };
+    onUpdate(updated);
   };
 
   const handlePassQuill = async () => {
@@ -1357,6 +1379,7 @@ function StoryEditor({ story, onBack, onUpdate, onEdit, userEmail, userId }) {
             <p style={{ ...styles.entryText, margin: 0 }}>
               {story.entries.map((entry, i) => {
                 const authorChanged = i > 0 && story.entries[i - 1].email !== entry.email;
+                const isEditable = editableIds.has(entry.id);
                 return (
                   <span key={entry.id}>
                     {authorChanged && (
@@ -1365,14 +1388,27 @@ function StoryEditor({ story, onBack, onUpdate, onEdit, userEmail, userId }) {
                         background: entry.color, margin: "0 8px", verticalAlign: "middle",
                       }} />
                     )}
-                    <span style={{ whiteSpace: "pre-wrap" }}>{entry.text}</span>{" "}
+                    {isEditable ? (
+                      <InlineEditableSpan
+                        text={entry.text}
+                        color={entry.color}
+                        onSave={newText => handleEditEntry(entry.id, newText)}
+                      />
+                    ) : (
+                      <span style={{ whiteSpace: "pre-wrap" }}>{entry.text}</span>
+                    )}{" "}
                   </span>
                 );
               })}
             </p>
           ) : (
             story.entries.map((entry) => (
-              <EntryBlock key={entry.id} entry={entry} />
+              <EntryBlock
+                key={entry.id}
+                entry={entry}
+                canEdit={editableIds.has(entry.id)}
+                onEdit={handleEditEntry}
+              />
             ))
           )}
           <div ref={bottomRef} />
@@ -1475,9 +1511,12 @@ function StoryEditor({ story, onBack, onUpdate, onEdit, userEmail, userId }) {
   );
 }
 
-function EntryBlock({ entry }) {
+function EntryBlock({ entry, canEdit = false, onEdit }) {
   const time = new Date(entry.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   const [showTime, setShowTime] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editText, setEditText] = useState(entry.text);
+  const cancelRef = useRef(false);
   const touchStartX = useRef(null);
 
   const handleTouchStart = (e) => {
@@ -1494,14 +1533,96 @@ function EntryBlock({ entry }) {
   return (
     <div
       style={{ ...styles.entryBlock, borderLeft: `3px solid ${entry.color}`, position: "relative" }}
-      onMouseEnter={() => setShowTime(true)}
-      onMouseLeave={() => setShowTime(false)}
+      onMouseEnter={() => !isEditing && setShowTime(true)}
+      onMouseLeave={() => !isEditing && setShowTime(false)}
       onTouchStart={handleTouchStart}
       onTouchEnd={handleTouchEnd}
     >
-      <p style={{ ...styles.entryText, margin: 0 }}>{entry.text}</p>
-      <span style={{ ...styles.entryTime, position: "absolute", top: 0, right: 0, opacity: showTime ? 1 : 0, transition: "opacity 0.15s" }}>{time}</span>
+      {isEditing ? (
+        <div>
+          <textarea
+            style={{ ...styles.textarea, borderColor: entry.color, minHeight: 80, marginBottom: 8 }}
+            value={editText}
+            autoFocus
+            onChange={e => setEditText(e.target.value)}
+            onBlur={() => {
+              if (cancelRef.current) { cancelRef.current = false; return; }
+              if (editText.trim()) onEdit(entry.id, editText);
+              setIsEditing(false);
+            }}
+            onKeyDown={e => {
+              if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+                onEdit(entry.id, editText);
+                setIsEditing(false);
+              }
+              if (e.key === "Escape") {
+                cancelRef.current = true;
+                setEditText(entry.text);
+                setIsEditing(false);
+              }
+            }}
+          />
+          <div style={{ display: "flex", gap: 8 }}>
+            <button style={styles.btnPrimary} onClick={() => { onEdit(entry.id, editText); setIsEditing(false); }}>Save</button>
+            <button style={styles.btnSecondary} onMouseDown={() => { cancelRef.current = true; }} onClick={() => { setEditText(entry.text); setIsEditing(false); }}>Cancel</button>
+          </div>
+        </div>
+      ) : (
+        <>
+          <p
+            style={{ ...styles.entryText, margin: 0, cursor: canEdit ? "text" : "default" }}
+            onClick={() => canEdit && setIsEditing(true)}
+            title={canEdit ? "Click to edit" : undefined}
+          >
+            {entry.text}
+          </p>
+          <span style={{ ...styles.entryTime, position: "absolute", top: 0, right: 0, opacity: showTime ? 1 : 0, transition: "opacity 0.15s" }}>
+            {time}
+          </span>
+        </>
+      )}
     </div>
+  );
+}
+
+function InlineEditableSpan({ text, color, onSave }) {
+  const ref = useRef(null);
+
+  useEffect(() => {
+    if (ref.current && ref.current.textContent !== text) {
+      ref.current.textContent = text;
+    }
+  }, [text]);
+
+  return (
+    <span
+      ref={ref}
+      contentEditable
+      suppressContentEditableWarning
+      style={{
+        whiteSpace: "pre-wrap",
+        cursor: "text",
+        outline: "none",
+        borderBottom: `1px solid ${color}`,
+      }}
+      onBlur={() => {
+        const newText = ref.current?.textContent?.trim();
+        if (newText && newText !== text) onSave(newText);
+      }}
+      onKeyDown={e => {
+        if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+          e.preventDefault();
+          const newText = ref.current?.textContent?.trim();
+          if (newText) { onSave(newText); ref.current?.blur(); }
+        }
+        if (e.key === "Escape") {
+          if (ref.current) ref.current.textContent = text;
+          ref.current?.blur();
+        }
+      }}
+    >
+      {text}
+    </span>
   );
 }
 
