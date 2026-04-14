@@ -3,12 +3,14 @@ ALTER TABLE stories ENABLE ROW LEVEL SECURITY;
 
 -- SELECT: user is the creator OR their email appears in the participants array
 -- This makes the dashboard automatically show all stories a user created or was invited to
+-- Note: auth.email() is used instead of querying auth.users directly; the authenticated
+-- role does not have SELECT permission on auth.users, which would silently break the policy.
 CREATE POLICY "stories_select" ON stories
 FOR SELECT TO authenticated USING (
   creator_id = auth.uid()
   OR EXISTS (
     SELECT 1 FROM jsonb_array_elements(participants) AS p
-    WHERE p->>'email' = (SELECT email FROM auth.users WHERE id = auth.uid())
+    WHERE p->>'email' = auth.email()
   )
 );
 
@@ -24,7 +26,7 @@ FOR UPDATE TO authenticated USING (
   creator_id = auth.uid()
   OR EXISTS (
     SELECT 1 FROM jsonb_array_elements(participants) AS p
-    WHERE p->>'email' = (SELECT email FROM auth.users WHERE id = auth.uid())
+    WHERE p->>'email' = auth.email()
   )
 );
 

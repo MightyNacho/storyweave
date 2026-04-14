@@ -9,7 +9,7 @@ FOR SELECT TO authenticated USING (
   creator_id = auth.uid()
   OR EXISTS (
     SELECT 1 FROM jsonb_array_elements(participants) AS p
-    WHERE p->>'email' = (SELECT email FROM auth.users WHERE id = auth.uid())
+    WHERE p->>'email' = auth.email()
   )
   OR (open_invite_expires_at IS NOT NULL AND open_invite_expires_at > NOW())
 );
