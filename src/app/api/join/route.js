@@ -49,6 +49,16 @@ export async function POST(request) {
     return Response.json({ error: "Invite link has expired." }, { status: 403 });
   }
 
+  // ── Enforce participant cap ───────────────────────────────────────────────
+  const MAX_PARTICIPANTS = 5;
+  const activeCount = (story.participants || []).filter(p => !p.left).length;
+  if (activeCount >= MAX_PARTICIPANTS) {
+    return Response.json(
+      { error: `This story is full — it already has ${MAX_PARTICIPANTS} participants.` },
+      { status: 403 }
+    );
+  }
+
   // ── Add user to participants if not already in ───────────────────────────
   const userEmail = user.email.toLowerCase();
   const allParticipants = story.participants || [];

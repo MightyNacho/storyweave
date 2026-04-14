@@ -638,7 +638,7 @@ function ShareModal({ story, onClose, onUpdate }) {
   };
 
   const handleShareLink = async () => {
-    const expiresAt = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString();
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
     await supabase.from("stories").update({ open_invite_expires_at: expiresAt }).eq("id", currentStory.id);
     const updated = { ...currentStory, openInviteExpiresAt: expiresAt };
     setCurrentStory(updated);
@@ -646,6 +646,13 @@ function ShareModal({ story, onClose, onUpdate }) {
     navigator.clipboard.writeText(`${window.location.origin}/story/${currentStory.id}`);
     setCopied(true);
     setTimeout(() => setCopied(false), 2500);
+  };
+
+  const handleRevokeLink = async () => {
+    await supabase.from("stories").update({ open_invite_expires_at: null }).eq("id", currentStory.id);
+    const updated = { ...currentStory, openInviteExpiresAt: null };
+    setCurrentStory(updated);
+    onUpdate(updated);
   };
 
   return (
@@ -707,7 +714,7 @@ function ShareModal({ story, onClose, onUpdate }) {
 
         {/* Share link */}
         <div style={{ borderTop: "1px solid #2a2825", paddingTop: 16, marginBottom: 24 }}>
-          <label style={{ ...styles.label, marginBottom: 10 }}>Or share an open link <span style={styles.optional}>(2-day access)</span></label>
+          <label style={{ ...styles.label, marginBottom: 10 }}>Or share an open link <span style={styles.optional}>(24-hour access)</span></label>
           <button
             style={{
               ...styles.pillBtn,
@@ -717,6 +724,14 @@ function ShareModal({ story, onClose, onUpdate }) {
           >
             {copied ? "Link copied!" : "Copy Share Link"}
           </button>
+          {currentStory.openInviteExpiresAt && new Date(currentStory.openInviteExpiresAt) > new Date() && (
+            <button
+              style={{ ...styles.pillBtn, color: "#BC4749", border: "1px solid #BC4749", marginTop: 8 }}
+              onClick={handleRevokeLink}
+            >
+              Disable link
+            </button>
+          )}
         </div>
 
         <div style={{ display: "flex", justifyContent: "flex-end" }}>
@@ -819,12 +834,17 @@ function EditStory({ story, onCancel, onSave }) {
   const [inviteStatus, setInviteStatus] = useState({}); // { email: "sending"|"sent"|"error" }
 
   const handleShareLink = async () => {
-    const expiresAt = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString();
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
     setCurrentExpiresAt(expiresAt);
     await supabase.from("stories").update({ open_invite_expires_at: expiresAt }).eq("id", story.id);
     navigator.clipboard.writeText(`${window.location.origin}/story/${story.id}`);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleRevokeLink = async () => {
+    setCurrentExpiresAt(null);
+    await supabase.from("stories").update({ open_invite_expires_at: null }).eq("id", story.id);
   };
 
   const originalEmails = new Set(story.participants.map(p => p.email));
@@ -995,6 +1015,15 @@ function EditStory({ story, onCancel, onSave }) {
           >
             {copied ? "Copied link!" : "Share Link"}
           </button>
+          {currentExpiresAt && new Date(currentExpiresAt) > new Date() && (
+            <button
+              type="button"
+              style={{ ...styles.pillBtn, color: "#BC4749", border: "1px solid #BC4749", alignSelf: "flex-start" }}
+              onClick={handleRevokeLink}
+            >
+              Disable link
+            </button>
+          )}
         </div>
 
         {error && <p style={styles.errorText}>{error}</p>}
@@ -1126,12 +1155,17 @@ function StoryEditor({ story, onBack, onUpdate, onEdit, userEmail, userId }) {
   };
 
   const handleShareLink = async () => {
-    const expiresAt = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString();
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
     const updated = { ...story, openInviteExpiresAt: expiresAt };
     await onUpdate(updated);
     navigator.clipboard.writeText(`${window.location.origin}/story/${story.id}`);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleRevokeLink = async () => {
+    const updated = { ...story, openInviteExpiresAt: null };
+    await onUpdate(updated);
   };
 
   const toggleMode = () => {
@@ -1262,9 +1296,17 @@ function StoryEditor({ story, onBack, onUpdate, onEdit, userEmail, userId }) {
               {copied ? "Copied link!" : "Share Link"}
             </button>
             {story.openInviteExpiresAt && new Date(story.openInviteExpiresAt) > new Date() && (
-              <p style={{ fontSize: 11, color: "#555", margin: "4px 0 0" }}>
-                Active for 2 days from last share
-              </p>
+              <>
+                <p style={{ fontSize: 11, color: "#555", margin: "4px 0 0" }}>
+                  Active for 24 hours from last share
+                </p>
+                <button
+                  style={{ ...styles.pillBtn, color: "#BC4749", border: "1px solid #BC4749", marginTop: 4, fontSize: 11 }}
+                  onClick={handleRevokeLink}
+                >
+                  Disable link
+                </button>
+              </>
             )}
           </>
         )}
