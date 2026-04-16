@@ -841,6 +841,7 @@ function EditStory({ story, onCancel, onSave }) {
   const [title, setTitle] = useState(story.title);
   const [genre, setGenre] = useState(story.genre || "");
   const [turnBased, setTurnBased] = useState(story.turnBased);
+  const [quickStories, setQuickStories] = useState(story.quickStories || false);
   const [participants, setParticipants] = useState(
     story.participants.length > 0 ? story.participants : [{ name: "", email: "", color: PRESET_COLORS[0] }]
   );
@@ -909,7 +910,8 @@ function EditStory({ story, onCancel, onSave }) {
       ...story,
       title: title.trim(),
       genre: genre.trim(),
-      turnBased,
+      turnBased: turnBased || quickStories,
+      quickStories,
       openInviteExpiresAt: currentExpiresAt,
       participants: validP.map(p => ({ ...p, email: p.email.trim().toLowerCase() })),
     });
@@ -947,6 +949,18 @@ function EditStory({ story, onCancel, onSave }) {
             <div style={{ ...styles.toggleThumb, transform: turnBased ? "translateX(20px)" : "translateX(2px)" }} />
           </div>
           <span style={styles.toggleLabel}>Turn-Based</span>
+        </div>
+
+        <label style={styles.label}>Quick Stories</label>
+        <div style={styles.toggleRow}>
+          <span style={styles.toggleLabel}>Off</span>
+          <div
+            style={{ ...styles.toggle, background: quickStories ? "#E07A5F" : "#3a3a3a" }}
+            onClick={() => setQuickStories(!quickStories)}
+          >
+            <div style={{ ...styles.toggleThumb, transform: quickStories ? "translateX(20px)" : "translateX(2px)" }} />
+          </div>
+          <span style={styles.toggleLabel}>Auto-pass quill</span>
         </div>
 
         <label style={styles.label}>Participants</label>
@@ -1086,11 +1100,6 @@ function StoryEditor({ story, onBack, onUpdate, onEdit, userEmail, userId }) {
   const touchStartX = useRef(null);
   const touchStartY = useRef(null);
 
-  useEffect(() => {
-    if (window.matchMedia("(max-width: 768px)").matches) return;
-    const t = setTimeout(() => setSidebarOpen(false), 2000);
-    return () => clearTimeout(t);
-  }, []);
 
   const handleTouchStart = (e) => {
     touchStartX.current = e.touches[0].clientX;
@@ -1511,7 +1520,13 @@ function StoryEditor({ story, onBack, onUpdate, onEdit, userEmail, userId }) {
             {/* 46px = 34px button + 12px gap, so "next writer" right-edge aligns with textarea right-edge */}
             <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
               <button
-                style={{ ...styles.passQuillBtn, opacity: !canWrite ? 0.4 : 1 }}
+                style={{
+                  ...styles.passQuillBtn,
+                  borderColor: "#E07A5F",
+                  color: "#E07A5F",
+                  opacity: !canWrite ? 0.4 : 1,
+                  visibility: story.quickStories ? "hidden" : "visible",
+                }}
                 onClick={() => setShowPassModal(true)}
                 disabled={!canWrite}
                 title="Pass the quill to the next writer"
