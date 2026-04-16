@@ -22,6 +22,7 @@ const toDb = (story) => ({
   title: story.title,
   genre: story.genre || "",
   turn_based: story.turnBased,
+  quick_stories: story.quickStories || false,
   open_invite_expires_at: story.openInviteExpiresAt || null,
   participants: [...(story.participants || []), ...(story.leftParticipants || [])],
   entries: story.entries,
@@ -35,6 +36,7 @@ const fromDb = (row) => {
     title: row.title,
     genre: row.genre || "",
     turnBased: row.turn_based,
+    quickStories: row.quick_stories || false,
     openInviteExpiresAt: row.open_invite_expires_at || null,
     participants: allP.filter(p => !p.left),
     leftParticipants: allP.filter(p => p.left),
@@ -752,6 +754,7 @@ function CreateStory({ onCancel, onCreate, user, serverError }) {
   const [title, setTitle] = useState("");
   const [genre, setGenre] = useState("");
   const [turnBased, setTurnBased] = useState(false);
+  const [quickStories, setQuickStories] = useState(false);
   const [error, setError] = useState("");
 
   const handleCreate = () => {
@@ -760,7 +763,8 @@ function CreateStory({ onCancel, onCreate, user, serverError }) {
       id: crypto.randomUUID(),
       title: title.trim(),
       genre: genre.trim(),
-      turnBased,
+      turnBased: turnBased || quickStories,
+      quickStories,
       openInviteExpiresAt: null,
       participants: [{ name: creatorName, email: creatorEmail.toLowerCase(), color: PRESET_COLORS[0] }],
       entries: [],
@@ -802,6 +806,18 @@ function CreateStory({ onCancel, onCreate, user, serverError }) {
             <div style={{ ...styles.toggleThumb, transform: turnBased ? "translateX(20px)" : "translateX(2px)" }} />
           </div>
           <span style={styles.toggleLabel}>Turn-Based</span>
+        </div>
+
+        <label style={styles.label}>Quick Stories</label>
+        <div style={styles.toggleRow}>
+          <span style={styles.toggleLabel}>Off</span>
+          <div
+            style={{ ...styles.toggle, background: quickStories ? "#E07A5F" : "#3a3a3a" }}
+            onClick={() => setQuickStories(!quickStories)}
+          >
+            <div style={{ ...styles.toggleThumb, transform: quickStories ? "translateX(20px)" : "translateX(2px)" }} />
+          </div>
+          <span style={styles.toggleLabel}>Auto-pass quill</span>
         </div>
 
         {error && <p style={styles.errorText}>{error}</p>}
@@ -1035,6 +1051,22 @@ function EditStory({ story, onCancel, onSave }) {
     </div>
   );
 }
+function groupEntries(entries) {
+  if (!entries.length) return [];
+  const groups = [];
+  let current = [entries[0]];
+  for (let i = 1; i < entries.length; i++) {
+    if (entries[i].email.toLowerCase() === current[0].email.toLowerCase()) {
+      current.push(entries[i]);
+    } else {
+      groups.push(current);
+      current = [entries[i]];
+    }
+  }
+  groups.push(current);
+  return groups;
+}
+
 function StoryEditor({ story, onBack, onUpdate, onEdit, userEmail, userId }) {
   const isCreator = story.creatorId === userId;
   const [text, setText] = useState("");
@@ -1117,13 +1149,32 @@ function StoryEditor({ story, onBack, onUpdate, onEdit, userEmail, userId }) {
       color: activeParticipant.color,
       timestamp: new Date().toISOString(),
     };
-    const updated = {
-      ...story,
-      turnBased,
-      entries: [...story.entries, newEntry],
-    };
-    onUpdate(updated);
-    setText("");
+    if (story.quickStories) {
+      const nextIndex = (story.currentTurnIndex + 1) % story.participants.length;
+      const nextParticipant = story.participants[nextIndex];
+      const updated = {
+        ...story,
+        turnBased: true,
+        currentTurnIndex: nextIndex,
+        entries: [...story.entries, newEntry],
+      };
+      setTurnBased(true);
+      onUpdate(updated);
+      setText("");
+      fetch("/api/notify-turn", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ storyId: updated.id, currentParticipantEmail: nextParticipant.email, previousParticipantEmail: activeParticipant?.email }),
+      }).catch(err => console.error("Quick stories notify failed:", err));
+    } else {
+      const updated = {
+        ...story,
+        turnBased,
+        entries: [...story.entries, newEntry],
+      };
+      onUpdate(updated);
+      setText("");
+    }
   };
 
   const handleEditEntry = (entryId, newText) => {
@@ -1133,6 +1184,19 @@ function StoryEditor({ story, onBack, onUpdate, onEdit, userEmail, userId }) {
       entries: story.entries.map(e =>
         e.id === entryId ? { ...e, text: newText.trim() } : e
       ),
+    };
+    onUpdate(updated);
+  };
+
+  const handleEditGroup = (entryIds, newText) => {
+    if (!newText.trim()) return;
+    const [firstId, ...restIds] = entryIds;
+    const restSet = new Set(restIds);
+    const updated = {
+      ...story,
+      entries: story.entries
+        .filter(e => !restSet.has(e.id))
+        .map(e => e.id === firstId ? { ...e, text: newText.trim() } : e),
     };
     onUpdate(updated);
   };
@@ -1402,12 +1466,12 @@ function StoryEditor({ story, onBack, onUpdate, onEdit, userEmail, userId }) {
               })}
             </p>
           ) : (
-            story.entries.map((entry) => (
-              <EntryBlock
-                key={entry.id}
-                entry={entry}
-                canEdit={editableIds.has(entry.id)}
-                onEdit={handleEditEntry}
+            groupEntries(story.entries).map((group) => (
+              <EntryGroup
+                key={group[0].id}
+                entries={group}
+                canEdit={group.every(e => editableIds.has(e.id))}
+                onEdit={handleEditGroup}
               />
             ))
           )}
@@ -1577,6 +1641,85 @@ function EntryBlock({ entry, canEdit = false, onEdit }) {
             {entry.text}
           </p>
           <span style={{ ...styles.entryTime, position: "absolute", top: 0, right: 0, opacity: showTime ? 1 : 0, transition: "opacity 0.15s" }}>
+            {time}
+          </span>
+        </>
+      )}
+    </div>
+  );
+}
+
+function EntryGroup({ entries, canEdit = false, onEdit }) {
+  const [isEditing, setIsEditing] = useState(false);
+  const [editText, setEditText] = useState('');
+  const cancelRef = useRef(false);
+  const [showTime, setShowTime] = useState(false);
+  const touchStartX = useRef(null);
+
+  const color = entries[0].color;
+  const combinedText = entries.map(e => e.text).join('\n\n');
+  const time = new Date(entries[entries.length - 1].timestamp)
+    .toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+  const startEdit = () => {
+    setEditText(combinedText);
+    setIsEditing(true);
+  };
+
+  const handleSave = () => {
+    onEdit(entries.map(e => e.id), editText);
+    setIsEditing(false);
+  };
+
+  const handleTouchStart = (e) => { touchStartX.current = e.touches[0].clientX; };
+  const handleTouchEnd = (e) => {
+    if (touchStartX.current === null) return;
+    const delta = e.changedTouches[0].clientX - touchStartX.current;
+    if (delta < -40) setShowTime(true);
+    else if (delta > 40) setShowTime(false);
+    touchStartX.current = null;
+  };
+
+  return (
+    <div
+      style={{ ...styles.entryBlock, borderLeft: `3px solid ${color}`, position: 'relative' }}
+      onMouseEnter={() => !isEditing && setShowTime(true)}
+      onMouseLeave={() => !isEditing && setShowTime(false)}
+      onTouchStart={handleTouchStart}
+      onTouchEnd={handleTouchEnd}
+    >
+      {isEditing ? (
+        <div>
+          <textarea
+            style={{ ...styles.textarea, borderColor: color, minHeight: 80, marginBottom: 8 }}
+            value={editText}
+            autoFocus
+            onChange={e => setEditText(e.target.value)}
+            onBlur={() => {
+              if (cancelRef.current) { cancelRef.current = false; return; }
+              if (editText.trim()) handleSave();
+              else setIsEditing(false);
+            }}
+            onKeyDown={e => {
+              if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { handleSave(); }
+              if (e.key === 'Escape') { cancelRef.current = true; setIsEditing(false); }
+            }}
+          />
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button style={styles.btnPrimary} onClick={handleSave}>Save</button>
+            <button style={styles.btnSecondary} onMouseDown={() => { cancelRef.current = true; }} onClick={() => setIsEditing(false)}>Cancel</button>
+          </div>
+        </div>
+      ) : (
+        <>
+          <p
+            style={{ ...styles.entryText, margin: 0, cursor: canEdit ? 'text' : 'default', whiteSpace: 'pre-wrap' }}
+            onClick={() => canEdit && startEdit()}
+            title={canEdit ? 'Click to edit' : undefined}
+          >
+            {combinedText}
+          </p>
+          <span style={{ ...styles.entryTime, position: 'absolute', top: 0, right: 0, opacity: showTime ? 1 : 0, transition: 'opacity 0.15s' }}>
             {time}
           </span>
         </>
