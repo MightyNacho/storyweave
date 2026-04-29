@@ -1445,6 +1445,7 @@ function StoryEditor({ story, onBack, onUpdate, onEdit, userEmail, userId }) {
             lastScrollY.current = current;
           }}
         >
+          <div style={{ display: "flex", flexDirection: "column", justifyContent: "flex-end", minHeight: "100%" }}>
           {story.entries.length === 0 && (
             <p style={styles.placeholder}>The page is blank. Begin the story…</p>
           )}
@@ -1485,6 +1486,7 @@ function StoryEditor({ story, onBack, onUpdate, onEdit, userEmail, userId }) {
             ))
           )}
           <div ref={bottomRef} />
+          </div>
         </div>
 
         {/* ── Write area — always visible ── */}
