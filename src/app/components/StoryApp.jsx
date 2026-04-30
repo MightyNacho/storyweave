@@ -1453,7 +1453,8 @@ function StoryEditor({ story, onBack, onUpdate, onEdit, userEmail, userId }) {
 
       {/* Main canvas */}
       <main style={styles.canvas}>
-        {/* Sticky top bar: sidebar toggle + beat bar */}
+        {/* Fixed top bar: sidebar toggle + beat bar */}
+        <div style={styles.canvasTopBarSpacer} />
         <div style={styles.canvasTopBar}>
           <button
             style={styles.sidebarToggleBtn}
@@ -2101,10 +2102,13 @@ const styles = {
     boxShadow: "6px 0 32px rgba(0,0,0,0.6)",
   },
   canvasTopBar: {
+    position: "fixed", top: 0, left: 0, right: 0, zIndex: 10,
     display: "flex", alignItems: "center", gap: 12,
-    padding: "10px 20px", flexShrink: 0,
+    padding: "10px 20px",
     background: "#0f0e0d", borderBottom: "1px solid #1f1e1c",
-    zIndex: 20,
+  },
+  canvasTopBarSpacer: {
+    height: 58, flexShrink: 0,
   },
   sidebarToggleBtn: {
     background: "#1a1917", border: "1px solid #2a2825", borderRadius: 10,
