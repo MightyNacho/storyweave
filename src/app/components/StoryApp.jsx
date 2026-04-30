@@ -27,6 +27,7 @@ const toDb = (story) => ({
   participants: [...(story.participants || []), ...(story.leftParticipants || [])],
   entries: story.entries,
   current_turn_index: story.currentTurnIndex,
+  current_beat: story.currentBeat ?? 0,
 });
 
 const fromDb = (row) => {
@@ -42,6 +43,7 @@ const fromDb = (row) => {
     leftParticipants: allP.filter(p => p.left),
     entries: row.entries || [],
     currentTurnIndex: row.current_turn_index || 0,
+    currentBeat: row.current_beat ?? 0,
     creatorId: row.creator_id,
     createdAt: row.created_at,
   };
@@ -1094,6 +1096,8 @@ function StoryEditor({ story, onBack, onUpdate, onEdit, userEmail, userId }) {
   const [showPassModal, setShowPassModal] = useState(false);
   const [copied, setCopied] = useState(false);
   const [showTopBar, setShowTopBar] = useState(false);
+  const [selectedBeat, setSelectedBeat] = useState(null);
+  const [showAllBeats, setShowAllBeats] = useState(false);
   const bottomRef = useRef(null);
   const scrollRef = useRef(null);
   const lastScrollY = useRef(0);
@@ -1147,6 +1151,11 @@ function StoryEditor({ story, onBack, onUpdate, onEdit, userEmail, userId }) {
       setShowTopBar(!canScroll);
     }
   }, [story.entries]);
+
+  const handleSetBeat = async (index) => {
+    onUpdate({ ...story, currentBeat: index });
+    await supabase.from("stories").update({ current_beat: index }).eq("id", story.id);
+  };
 
   const handleSubmit = () => {
     if (!text.trim() || !canWrite) return;
@@ -1424,6 +1433,17 @@ function StoryEditor({ story, onBack, onUpdate, onEdit, userEmail, userId }) {
             <span style={styles.dotDot}>⋯</span>
           </button>
         </div>
+
+        {/* Beat Bar */}
+        <BeatBar
+          currentBeat={story.currentBeat ?? 0}
+          onSetBeat={handleSetBeat}
+          selectedBeat={selectedBeat}
+          onSelectBeat={setSelectedBeat}
+          showAllBeats={showAllBeats}
+          onShowAllBeats={() => setShowAllBeats(true)}
+          onHideAllBeats={() => { setShowAllBeats(false); setSelectedBeat(null); }}
+        />
 
         {/* Story scroll */}
         <div
@@ -1787,6 +1807,130 @@ function InlineEditableSpan({ text, color, onSave }) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
+// BEAT BAR
+
+const STORY_CIRCLE_BEATS = [
+  { name: "You",    short: "Comfort Zone",          description: "A character is introduced in their ordinary world — this is who they are before the adventure begins." },
+  { name: "Need",   short: "Desire / Problem",       description: "Something is missing or wrong. The character wants or needs something, consciously or not." },
+  { name: "Go",     short: "Crossing the Threshold", description: "The character leaves their comfort zone and enters an unfamiliar situation. The journey begins." },
+  { name: "Search", short: "Road of Trials",         description: "The character adapts to the new world, trying and failing, learning the rules of the unfamiliar situation." },
+  { name: "Find",   short: "Meeting the Ordeal",     description: "The character gets what they wanted — or achieves the goal they set out for." },
+  { name: "Take",   short: "Consequence",            description: "Victory comes at a cost. The character pays a heavy price for what they found." },
+  { name: "Return", short: "The Road Back",          description: "The character begins the journey back to where they started, changed by what they experienced." },
+  { name: "Change", short: "Master of Two Worlds",   description: "Having returned, the character has been transformed. They have mastered both worlds." },
+];
+
+function BeatBar({ currentBeat, onSetBeat, selectedBeat, onSelectBeat, showAllBeats, onShowAllBeats, onHideAllBeats }) {
+  const containerRef = useRef(null);
+
+  useEffect(() => {
+    if (selectedBeat === null) return;
+    const handleOutside = (e) => {
+      if (containerRef.current && !containerRef.current.contains(e.target)) {
+        onSelectBeat(null);
+      }
+    };
+    document.addEventListener("mousedown", handleOutside);
+    return () => document.removeEventListener("mousedown", handleOutside);
+  }, [selectedBeat, onSelectBeat]);
+
+  const beat = selectedBeat !== null ? STORY_CIRCLE_BEATS[selectedBeat] : null;
+  const popupLeftPercent = selectedBeat !== null ? (selectedBeat / 8) * 100 : 0;
+
+  return (
+    <>
+      <div ref={containerRef} style={styles.beatBar}>
+        <div style={styles.beatSegments}>
+          {STORY_CIRCLE_BEATS.map((b, i) => {
+            const isActive = i === currentBeat;
+            const isPast = i < currentBeat;
+            const isSelected = i === selectedBeat;
+            return (
+              <div
+                key={i}
+                title={`${i + 1}. ${b.name}`}
+                style={{
+                  ...styles.beatSegment,
+                  background: isActive
+                    ? "#E07A5F"
+                    : isPast
+                    ? "rgba(224,122,95,0.35)"
+                    : "rgba(255,255,255,0.1)",
+                  boxShadow: isActive ? "0 0 8px rgba(224,122,95,0.5)" : "none",
+                  outline: isSelected ? "1px solid rgba(224,122,95,0.7)" : "none",
+                  outlineOffset: 2,
+                }}
+                onClick={() => {
+                  onSetBeat(i);
+                  onSelectBeat(selectedBeat === i ? null : i);
+                }}
+              />
+            );
+          })}
+        </div>
+
+        {beat && (
+          <div
+            style={{
+              ...styles.beatPopup,
+              left: `clamp(8px, calc(${popupLeftPercent}% + 4px), calc(100% - 240px))`,
+            }}
+          >
+            <div style={styles.beatPopupHeader}>
+              <span style={styles.beatPopupNumber}>{selectedBeat + 1}</span>
+              <span style={styles.beatPopupTitle}>{beat.name}</span>
+              <span style={styles.beatPopupTagline}>{beat.short}</span>
+            </div>
+            <p style={styles.beatPopupDesc}>{beat.description}</p>
+            <div style={styles.beatPopupActions}>
+              <button
+                style={styles.beatPopupMoreBtn}
+                onClick={() => { onShowAllBeats(); onSelectBeat(null); }}
+              >
+                More info ▸
+              </button>
+              <button style={styles.beatPopupCloseBtn} onClick={() => onSelectBeat(null)}>×</button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {showAllBeats && (
+        <div style={styles.modalOverlay} onClick={onHideAllBeats}>
+          <div style={{ ...styles.modal, maxWidth: 520, maxHeight: "80vh", display: "flex", flexDirection: "column" }} onClick={e => e.stopPropagation()}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+              <h2 style={styles.modalTitle}>Story Circle</h2>
+              <button style={styles.beatPopupCloseBtn} onClick={onHideAllBeats}>×</button>
+            </div>
+            <div style={{ overflowY: "auto", flex: 1, marginRight: -4, paddingRight: 4 }}>
+              {STORY_CIRCLE_BEATS.map((b, i) => (
+                <div
+                  key={i}
+                  style={{
+                    ...styles.beatAllItem,
+                    background: i === currentBeat ? "rgba(224,122,95,0.12)" : "transparent",
+                    borderLeft: `3px solid ${i === currentBeat ? "#E07A5F" : "transparent"}`,
+                  }}
+                >
+                  <span style={styles.beatAllNumber}>{i + 1}</span>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 3 }}>
+                      <span style={{ ...styles.beatPopupTitle, fontSize: 14, color: i === currentBeat ? "#E07A5F" : "#e8e0d0" }}>{b.name}</span>
+                      <span style={styles.beatPopupTagline}>{b.short}</span>
+                    </div>
+                    <p style={{ ...styles.beatPopupDesc, margin: 0 }}>{b.description}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════════
 // STYLES
 // ══════════════════════════════════════════════════════════════════════════
 const styles = {
@@ -2025,5 +2169,62 @@ const styles = {
     background: "none", border: "1px solid #3a3835", color: "#aaa", cursor: "pointer",
     fontSize: 12, padding: "5px 12px", borderRadius: 999,
     fontFamily: "'DM Sans', sans-serif", transition: "border-color 0.15s, color 0.15s",
+  },
+
+  // BEAT BAR
+  beatBar: {
+    position: "relative", padding: "10px 20px 0", flexShrink: 0,
+  },
+  beatSegments: {
+    display: "flex", gap: 3, height: 36, alignItems: "center",
+  },
+  beatSegment: {
+    flex: 1, height: 4, borderRadius: 2, cursor: "pointer",
+    transition: "transform 0.15s, background 0.2s, box-shadow 0.2s",
+  },
+  beatPopup: {
+    position: "absolute", top: "calc(100% + 2px)", zIndex: 60,
+    background: "#1e1c1a", border: "1px solid #2a2825", borderRadius: 10,
+    padding: "14px 16px 12px", boxShadow: "0 8px 32px rgba(0,0,0,0.55)",
+    minWidth: 230, maxWidth: 280,
+    fontFamily: "'DM Sans', sans-serif",
+  },
+  beatPopupHeader: {
+    display: "flex", alignItems: "baseline", gap: 7, marginBottom: 6,
+  },
+  beatPopupNumber: {
+    fontSize: 10, fontWeight: 700, color: "#E07A5F", background: "rgba(224,122,95,0.15)",
+    borderRadius: 4, padding: "1px 6px", lineHeight: "18px",
+  },
+  beatPopupTitle: {
+    fontSize: 13, fontWeight: 600, color: "#E07A5F",
+  },
+  beatPopupTagline: {
+    fontSize: 11, color: "#888", fontStyle: "italic",
+  },
+  beatPopupDesc: {
+    fontSize: 13, color: "#d4cdc0", lineHeight: 1.5, margin: "0 0 10px",
+  },
+  beatPopupActions: {
+    display: "flex", gap: 8, justifyContent: "flex-end", alignItems: "center",
+  },
+  beatPopupMoreBtn: {
+    background: "none", border: "1px solid #3a3835", color: "#aaa", cursor: "pointer",
+    fontSize: 11, padding: "4px 10px", borderRadius: 999,
+    fontFamily: "'DM Sans', sans-serif", transition: "border-color 0.15s, color 0.15s",
+  },
+  beatPopupCloseBtn: {
+    background: "none", border: "none", color: "#555", cursor: "pointer",
+    fontSize: 18, lineHeight: 1, padding: "0 2px",
+    fontFamily: "'DM Sans', sans-serif",
+  },
+  beatAllItem: {
+    display: "flex", gap: 12, padding: "10px 12px", borderRadius: 8,
+    marginBottom: 4, transition: "background 0.15s", alignItems: "flex-start",
+    paddingLeft: 10,
+  },
+  beatAllNumber: {
+    fontSize: 11, fontWeight: 700, color: "#E07A5F", background: "rgba(224,122,95,0.15)",
+    borderRadius: 4, padding: "2px 7px", lineHeight: "18px", flexShrink: 0, marginTop: 1,
   },
 };
