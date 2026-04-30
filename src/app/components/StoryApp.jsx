@@ -164,6 +164,36 @@ export default function App({ storyId } = {}) {
     load();
   }, [session]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Real-time: watch the active story for changes from other collaborators
+  useEffect(() => {
+    if (!activeStory?.id || !session) return;
+
+    const channel = supabase
+      .channel(`story-${activeStory.id}`)
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "stories", filter: `id=eq.${activeStory.id}` },
+        (payload) => {
+          const incoming = fromDb(payload.new);
+          setActiveStory(current => {
+            if (!current || incoming.id !== current.id) return current;
+            if (incoming.entries.length > current.entries.length) return incoming;
+            return current;
+          });
+          setStories(prev =>
+            prev.map(s => {
+              if (s.id !== incoming.id) return s;
+              if (incoming.entries.length > s.entries.length) return incoming;
+              return s;
+            })
+          );
+        }
+      )
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, [activeStory?.id, session]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const openStory = (story) => { setActiveStory(story); setView("story"); };
   const goHome = () => { setView("dashboard"); setActiveStory(null); setEditingStory(null); };
 
