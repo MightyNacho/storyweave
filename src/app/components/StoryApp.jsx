@@ -1415,7 +1415,7 @@ function StoryEditor({ story, onBack, onUpdate, onEdit, userEmail, userId }) {
       {/* Main canvas */}
       <main style={styles.canvas}>
         {/* Top bar with sidebar toggle */}
-        <div style={{ ...styles.canvasTopBar, opacity: showTopBar ? 1 : 0, pointerEvents: showTopBar ? "auto" : "none", transition: "opacity 0.2s" }}>
+        <div style={styles.canvasTopBar}>
           <button
             style={styles.sidebarToggleBtn}
             onClick={() => setSidebarOpen(o => !o)}
