@@ -1453,7 +1453,7 @@ function StoryEditor({ story, onBack, onUpdate, onEdit, userEmail, userId }) {
 
       {/* Main canvas */}
       <main style={styles.canvas}>
-        {/* Top bar with sidebar toggle */}
+        {/* Sticky top bar: sidebar toggle + beat bar */}
         <div style={styles.canvasTopBar}>
           <button
             style={styles.sidebarToggleBtn}
@@ -1462,18 +1462,16 @@ function StoryEditor({ story, onBack, onUpdate, onEdit, userEmail, userId }) {
           >
             <span style={styles.dotDot}>⋯</span>
           </button>
+          <BeatBar
+            currentBeat={story.currentBeat ?? 0}
+            onSetBeat={handleSetBeat}
+            selectedBeat={selectedBeat}
+            onSelectBeat={setSelectedBeat}
+            showAllBeats={showAllBeats}
+            onShowAllBeats={() => setShowAllBeats(true)}
+            onHideAllBeats={() => { setShowAllBeats(false); setSelectedBeat(null); }}
+          />
         </div>
-
-        {/* Beat Bar */}
-        <BeatBar
-          currentBeat={story.currentBeat ?? 0}
-          onSetBeat={handleSetBeat}
-          selectedBeat={selectedBeat}
-          onSelectBeat={setSelectedBeat}
-          showAllBeats={showAllBeats}
-          onShowAllBeats={() => setShowAllBeats(true)}
-          onHideAllBeats={() => { setShowAllBeats(false); setSelectedBeat(null); }}
-        />
 
         {/* Story scroll */}
         <div
@@ -2103,8 +2101,10 @@ const styles = {
     boxShadow: "6px 0 32px rgba(0,0,0,0.6)",
   },
   canvasTopBar: {
-    display: "flex", alignItems: "center", padding: "14px 20px 0",
-    flexShrink: 0,
+    display: "flex", alignItems: "center", gap: 12,
+    padding: "10px 20px", flexShrink: 0,
+    background: "#0f0e0d", borderBottom: "1px solid #1f1e1c",
+    zIndex: 20,
   },
   sidebarToggleBtn: {
     background: "#1a1917", border: "1px solid #2a2825", borderRadius: 10,
@@ -2203,7 +2203,7 @@ const styles = {
 
   // BEAT BAR
   beatBar: {
-    position: "relative", padding: "10px 20px 0", flexShrink: 0,
+    flex: 1, position: "relative",
   },
   beatSegments: {
     display: "flex", gap: 3, height: 36, alignItems: "center",
